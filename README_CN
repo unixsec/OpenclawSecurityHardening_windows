@@ -1,0 +1,378 @@
+# OpenClaw Windows 10 安全加固脚本
+
+## 概述
+
+本项目提供了一套完整的 Windows 10/11 安全加固脚本，用于在企业环境中安全部署 OpenClaw AI Gateway。脚本遵循 CIS Windows 安全基准和微软最佳安全实践，实现自动化的安全配置。
+
+**v1.0 新特性**: 全新的**交互式多选界面**，用户可以自由选择需要执行的加固项！
+
+## 作者信息
+
+| 项目 | 信息 |
+|------|------|
+| **作者** | Alex |
+| **邮箱** | unix_sec@163.com |
+| **版本** | 1.0.0 |
+| **创建日期** | 2026-02-05 |
+| **最后更新** | 2026-02-05 |
+
+## 功能特性
+
+### 核心功能
+
+- ✅ **服务账户管理** - 创建最小权限的专用服务账户
+- ✅ **文件权限加固** - NTFS ACL 权限配置，移除不必要的访问权限
+- ✅ **防火墙配置** - Windows 防火墙规则，阻止未授权访问
+- ✅ **Defender 配置** - Windows Defender 实时保护和 ASR 规则
+- ✅ **审计策略** - 安全事件审计，支持 SIEM 集成
+- ✅ **安全配置生成** - 自动生成安全的配置文件和 Token
+- ✅ **安全审计报告** - 一键检查当前安全状态
+- ✅ **紧急回滚** - 快速恢复默认配置
+
+### 安全加固项目
+
+| 加固项 | 描述 | 严重性 |
+|--------|------|--------|
+| 服务账户隔离 | 使用专用低权限账户运行服务 | 高 |
+| 配置文件权限 | 移除 Everyone/Users 对敏感文件的访问 | 高 |
+| 网络隔离 | Gateway 仅绑定到本地回环地址 | 高 |
+| 防火墙规则 | 阻止外部对 Gateway 端口的访问 | 高 |
+| 实时保护 | 启用 Windows Defender 实时扫描 | 中 |
+| 行为监控 | 启用可疑行为检测 | 中 |
+| ASR 规则 | 攻击面缩减规则 | 中 |
+| 安全审计 | 启用登录、进程、文件访问审计 | 中 |
+
+## 系统要求
+
+### 最低要求
+
+- **操作系统**: Windows 10 版本 1809+ / Windows 11 / Windows Server 2016+
+- **PowerShell**: 5.1 或更高版本
+- **权限**: 管理员权限
+- **磁盘空间**: 100 MB（用于日志和配置）
+
+### 推荐环境
+
+- Windows 10 企业版 / Windows 11 企业版
+- PowerShell 7.x
+- Windows Defender（非第三方防病毒软件）
+- 域环境（用于组策略集成）
+
+## 文件结构
+
+```
+scripts/
+├── README.md                        # 英文文档
+├── README_CN.md                     # 本文档（中文）
+├── windows-security-hardening.bat   # BAT 脚本（交互式菜单）
+└── windows-security-hardening.ps1   # PowerShell 脚本（命令行参数）
+```
+
+## 快速开始
+
+### 方法一：使用 BAT 脚本（推荐新手）
+
+1. 右键点击 `windows-security-hardening.bat`
+2. 选择 **"以管理员身份运行"**
+3. 在主菜单选择操作模式：
+   - `[1]` **交互式选择** - 自由选择需要的加固项（推荐）
+   - `[2]` 一键完整加固 - 执行所有加固项
+4. 如果选择交互式模式：
+   - 输入数字 `1-7` 选择/取消选择加固项
+   - 输入 `A` 全选所有项
+   - 输入 `E` 开始执行
+5. 按照提示完成配置
+
+### 方法二：使用 PowerShell 脚本
+
+```powershell
+# 1. 以管理员身份打开 PowerShell
+
+# 2. 设置执行策略（如果需要）
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+# 3. 进入脚本目录
+cd "C:\path\to\scripts"
+
+# 4. 执行完整安全加固
+.\windows-security-hardening.ps1 -Action All
+```
+
+## 详细使用说明
+
+### BAT 脚本 - 主菜单
+
+| 选项 | 功能 | 说明 |
+|------|------|------|
+| 1 | **交互式选择加固项** | 进入多选界面，自由选择要执行的加固项（推荐） |
+| 2 | 一键完整加固 | 一次性执行所有加固项 |
+| 3 | 生成安全审计报告 | 检查当前安全配置状态 |
+| 4 | 撤销安全加固 | 紧急恢复默认配置 |
+| 0 | 退出 | 退出脚本 |
+
+### BAT 脚本 - 交互式选择界面
+
+进入交互式选择后，可使用以下操作：
+
+| 操作 | 说明 |
+|------|------|
+| `1-7` | 切换对应加固项的选中状态（再次输入取消选择） |
+| `123` | 同时切换多个加固项（支持连续输入多个数字） |
+| `A` | **全选**所有加固项 |
+| `N` | 取消全部选择 |
+| `E` | 执行选中的加固项 |
+| `B` | 返回主菜单 |
+
+### 可选择的加固项
+
+| 编号 | 加固项 | 说明 |
+|------|--------|------|
+| 1 | 创建服务账户 | 创建低权限的 openclaw_svc 账户 |
+| 2 | 配置文件权限 | 配置 NTFS ACL 权限 |
+| 3 | 配置防火墙 | 配置 Windows 防火墙规则 |
+| 4 | 配置 Windows Defender | 启用保护功能和 ASR 规则 |
+| 5 | 启用审计策略 | 配置安全事件审计 |
+| 6 | 生成安全配置 | 生成安全配置文件和 Token |
+| 7 | 安装服务 | 使用 NSSM 安装 Windows 服务 |
+
+### PowerShell 脚本参数
+
+```powershell
+.\windows-security-hardening.ps1
+    [-Action <String>]          # 执行的操作
+    [-ServiceAccount <String>]  # 服务账户名称（默认: openclaw_svc）
+    [-GatewayPort <Int>]        # Gateway 端口（默认: 18789）
+    [-OpenClawDir <String>]     # OpenClaw 安装目录（默认: C:\OpenClaw）
+    [-Force]                    # 强制执行，跳过确认
+    [-WhatIf]                   # 预览模式，不实际执行
+```
+
+#### Action 参数值
+
+| 值 | 说明 |
+|------|------|
+| `All` | 执行完整安全加固（默认） |
+| `Account` | 仅创建服务账户 |
+| `Permissions` | 仅配置文件权限 |
+| `Firewall` | 仅配置防火墙 |
+| `Defender` | 仅配置 Windows Defender |
+| `Audit` | 仅启用审计策略 |
+| `Service` | 安装服务（需要 NSSM） |
+| `Report` | 生成安全审计报告 |
+| `Rollback` | 撤销安全加固 |
+
+### BAT 脚本使用示例
+
+```
+========================================
+交互式选择界面示例
+========================================
+
+[ ] [1] 创建服务账户
+[√] [2] 配置文件权限      <- 已选中
+[√] [3] 配置防火墙        <- 已选中
+[ ] [4] 配置 Windows Defender
+[ ] [5] 启用审计策略
+[√] [6] 生成安全配置      <- 已选中
+[ ] [7] 安装服务
+
+请输入选项: 236     <- 输入 236 切换这三项的状态
+请输入选项: A       <- 输入 A 全选所有项
+请输入选项: E       <- 输入 E 执行选中的加固项
+```
+
+### PowerShell 脚本使用示例
+
+```powershell
+# 示例 1: 完整安全加固
+.\windows-security-hardening.ps1 -Action All
+
+# 示例 2: 预览模式（不实际执行）
+.\windows-security-hardening.ps1 -Action All -WhatIf
+
+# 示例 3: 自定义服务账户和端口
+.\windows-security-hardening.ps1 -Action All -ServiceAccount "my_openclaw" -GatewayPort 8080
+
+# 示例 4: 仅生成安全审计报告
+.\windows-security-hardening.ps1 -Action Report
+
+# 示例 5: 强制撤销加固（跳过确认）
+.\windows-security-hardening.ps1 -Action Rollback -Force
+```
+
+## 配置说明
+
+### 默认配置
+
+脚本使用以下默认配置，可根据需要修改：
+
+```powershell
+$Config = @{
+    OpenClawDir    = "C:\OpenClaw"              # OpenClaw 安装目录
+    StateDir       = "$env:USERPROFILE\.openclaw" # 状态目录
+    LogsDir        = "C:\Logs\OpenClaw"         # 日志目录
+    SecretsDir     = "C:\OpenClaw\secrets"      # 密钥目录
+    ServiceAccount = "openclaw_svc"             # 服务账户
+    GatewayPort    = 18789                      # Gateway 端口
+}
+```
+
+### 目录权限配置
+
+| 目录 | 权限配置 |
+|------|----------|
+| `C:\OpenClaw` | SYSTEM: 完全控制, Administrators: 完全控制, openclaw_svc: 读取执行 |
+| `%USERPROFILE%\.openclaw` | SYSTEM: 完全控制, Administrators: 完全控制, openclaw_svc: 修改, 当前用户: 完全控制 |
+| `C:\OpenClaw\secrets` | SYSTEM: 完全控制, Administrators: 完全控制, openclaw_svc: 只读 |
+| `C:\Logs\OpenClaw` | SYSTEM: 完全控制, Administrators: 完全控制, openclaw_svc: 修改 |
+
+## 安全审计报告
+
+运行安全审计报告会检查以下项目：
+
+| 检查项 | 期望结果 |
+|--------|----------|
+| 服务账户存在 | ✅ PASS |
+| 服务账户不在管理员组 | ✅ PASS |
+| 配置文件权限正确 | ✅ PASS |
+| 防火墙已启用 | ✅ PASS |
+| 防火墙规则已配置 | ✅ PASS |
+| Gateway 端口未对外暴露 | ✅ PASS |
+| Windows Defender 运行中 | ✅ PASS |
+| 实时保护已启用 | ✅ PASS |
+| 服务未以 LocalSystem 运行 | ✅ PASS |
+
+### 报告输出示例
+
+```
+========================================
+OpenClaw Windows 安全审计报告
+========================================
+日期: 2026-02-05 14:30:00
+
+[1] 检查服务账户...
+  [PASS] 服务账户存在
+  [PASS] 服务账户不在管理员组中
+
+[2] 检查文件权限...
+  [PASS] config.yaml 权限配置正确
+
+[3] 检查防火墙...
+  [PASS] Windows 防火墙已启用
+  [PASS] OpenClaw 防火墙规则已配置
+
+[4] 检查端口暴露...
+  [PASS] Gateway 端口未对外暴露
+
+[5] 检查 Windows Defender...
+  [PASS] 实时保护已启用
+  [PASS] 行为监控已启用
+
+[6] 检查服务...
+  [INFO] 服务状态: Running
+  [PASS] 服务账户: .\openclaw_svc
+
+========================================
+审计摘要
+========================================
+未发现严重安全问题
+```
+
+## 加固后的后续步骤
+
+1. **更改服务账户密码**
+   ```batch
+   net user openclaw_svc *
+   ```
+
+2. **查看生成的 Gateway Token**
+   ```batch
+   type C:\OpenClaw\secrets\gateway-token.txt
+   ```
+
+3. **启动 OpenClaw 服务**（如果已安装）
+   ```batch
+   net start OpenClawGateway
+   ```
+
+4. **定期运行安全审计**
+   ```powershell
+   .\windows-security-hardening.ps1 -Action Report
+   ```
+
+5. **配置计划任务进行定期审计**
+   ```powershell
+   # 创建每日安全审计任务
+   $Action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
+       -Argument "-File C:\OpenClaw\scripts\windows-security-hardening.ps1 -Action Report"
+   $Trigger = New-ScheduledTaskTrigger -Daily -At "02:00"
+   Register-ScheduledTask -TaskName "OpenClaw Security Audit" -Action $Action -Trigger $Trigger
+   ```
+
+## 故障排除
+
+### 常见问题
+
+#### Q1: 脚本提示"请以管理员身份运行"
+
+**解决方案**: 右键点击脚本，选择"以管理员身份运行"
+
+#### Q2: PowerShell 执行策略阻止脚本运行
+
+**解决方案**:
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+#### Q3: 服务账户创建失败
+
+**解决方案**: 检查是否有同名账户存在，或使用不同的账户名：
+```powershell
+.\windows-security-hardening.ps1 -Action Account -ServiceAccount "my_openclaw_svc"
+```
+
+#### Q4: 防火墙规则配置失败
+
+**解决方案**: 确保 Windows Firewall 服务正在运行：
+```powershell
+Get-Service -Name MpsSvc | Start-Service
+```
+
+#### Q5: 如何完全撤销加固配置？
+
+**解决方案**:
+```powershell
+.\windows-security-hardening.ps1 -Action Rollback -Force
+```
+
+### 日志位置
+
+所有操作日志保存在：
+```
+%TEMP%\openclaw-hardening-YYYYMMDD-HHmmss.log
+```
+
+## 安全建议
+
+1. **定期更新** - 保持 Windows 和脚本更新到最新版本
+2. **最小权限** - 不要将服务账户添加到管理员组
+3. **密码安全** - 使用强密码并定期更换
+4. **日志监控** - 定期检查安全日志和审计报告
+5. **备份配置** - 加固前备份现有配置
+6. **测试环境** - 先在测试环境验证脚本
+
+
+## 许可证
+
+本项目采用 Apache 2.0 许可证。详见 [LICENSE](../LICENSE) 文件。
+
+## 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+---
+
+**作者**: Alex  
+**邮箱**: unix_sec@163.com  
+**项目**: OpenClaw Windows Security Hardening Scripts  
+**版本**: 1.0.0
