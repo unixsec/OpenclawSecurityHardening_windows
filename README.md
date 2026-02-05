@@ -1,2 +1,2 @@
 # OpenclawSecurityHardening_windows
-Openclaw security hardening for windows10
+Openclaw security hardening for windows
