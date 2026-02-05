@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================================
 REM OpenClaw Windows 10 交互式安全加固脚本
-REM 版本: 2.0
+REM 版本: 1.0
 REM 作者: Alex
 REM 邮箱: unix_sec@163.com
 REM 适用: Windows 10 / Windows Server 2016+
