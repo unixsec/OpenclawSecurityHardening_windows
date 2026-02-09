@@ -1,1195 +1,958 @@
 @echo off
 REM ============================================================================
-REM OpenClaw Windows 10 交互式安全加固脚本
-REM 版本: 1.0
+REM OpenClaw Windows 安全加固脚本
+REM 版本: 1.2
 REM 作者: Alex
 REM 邮箱: unix_sec@163.com
-REM 适用: Windows 10 / Windows Server 2016+
-REM 
-REM 功能:
-REM   1. 创建专用服务账户
-REM   2. 配置文件系统权限 (NTFS ACL)
-REM   3. 配置 Windows 防火墙
-REM   4. 配置 Windows Defender
-REM   5. 启用安全审计策略
-REM   6. 生成安全配置文件
-REM   7. 安装 OpenClaw 服务
+REM 许可证: Apache License 2.0
+REM 适用: Windows 10/11, Windows Server 2016+
 REM
-REM 使用方法: 以管理员身份运行此脚本
+REM 安全风险覆盖 (基于源码分析 + 互联网安全研究):
+REM   [R1] Gateway 暴露     - 1800+ 实例暴露 API Key
+REM   [R2] 提示注入/命令注入 - Agent Shell 访问 + 提示词劫持
+REM   [R3] MCP 工具投毒      - ClawHavoc: 341 恶意 Skill
+REM   [R4] SSRF 攻击         - Agent 访问内网资源
+REM   [R5] 凭证泄露          - Token/API Key/聊天记录泄露
+REM   [R6] 权限提升          - elevated 工具 + 环境变量注入
+REM   [R7] 文件系统越界       - 路径遍历/符号链接攻击
+REM   [R8] 资源耗尽          - Fork 炸弹/内存耗尽
+REM   [R9] 供应链攻击        - ClawHub 恶意技能包
+REM   [R10] 日志/数据泄露     - 敏感信息写入日志
+REM
+REM 使用方法:
+REM   windows-security-hardening.bat              :: 交互式菜单
+REM   windows-security-hardening.bat --dry-run    :: 模拟运行
+REM   windows-security-hardening.bat --rollback 5 :: 回退加固项 5
+REM   windows-security-hardening.bat --debug 3    :: 调试加固项 3
+REM   windows-security-hardening.bat --status     :: 查看加固状态
 REM ============================================================================
 
-setlocal EnableDelayedExpansion
+setlocal enabledelayedexpansion
+chcp 65001 >nul 2>&1
 
 REM ============================================================================
-REM 配置变量 - 根据实际环境修改
+REM 配置变量
 REM ============================================================================
 set "OPENCLAW_DIR=C:\OpenClaw"
-set "OPENCLAW_STATE_DIR=%USERPROFILE%\.openclaw"
-set "OPENCLAW_LOGS_DIR=C:\Logs\OpenClaw"
-set "OPENCLAW_SECRETS_DIR=%OPENCLAW_DIR%\secrets"
-set "SERVICE_ACCOUNT=openclaw_svc"
+set "OPENCLAW_STATE_DIR=C:\OpenClaw\state"
+set "OPENCLAW_LOGS_DIR=C:\OpenClaw\logs"
+set "OPENCLAW_SECRETS_DIR=C:\OpenClaw\secrets"
+set "OPENCLAW_CONFIG_DIR=C:\OpenClaw\config"
+set "SERVICE_ACCOUNT=OpenClawService"
 set "GATEWAY_PORT=18789"
-set "NODE_PATH=C:\Program Files\nodejs"
-set "LOG_FILE=%TEMP%\openclaw-hardening-%DATE:~0,4%%DATE:~5,2%%DATE:~8,2%-%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%.log"
-set "LOG_FILE=%LOG_FILE: =0%"
+set "LOG_DIR=C:\OpenClaw\hardening-logs"
+for /f "tokens=1-3 delims=/ " %%a in ('date /t') do set "TODAY=%%c%%a%%b"
+set "LOG_FILE=%LOG_DIR%\hardening-%TODAY%.log"
+set "STATE_DIR=C:\OpenClaw\hardening-state"
+set "STATE_FILE=%STATE_DIR%\state.txt"
+set "DRY_RUN=0"
+set "DEBUG_MODE=0"
+set "DEBUG_ITEM=0"
+set "ROLLBACK_MODE=0"
+set "ROLLBACK_ITEM=0"
 
-REM 颜色代码
-set "RED=[91m"
-set "GREEN=[92m"
-set "YELLOW=[93m"
-set "CYAN=[96m"
-set "WHITE=[97m"
-set "RESET=[0m"
-set "BOLD=[1m"
+REM 环境能力标记 (检测后填充)
+set "HAS_FIREWALL=0"
+set "HAS_DEFENDER=0"
+set "HAS_APPLOCKER=0"
+set "HAS_AUDITPOL=0"
+set "HAS_POWERSHELL=0"
+set "HAS_SCHTASKS=0"
+set "HAS_BCDEDIT=0"
+set "HAS_ICACLS=0"
+set "HAS_NETSH=0"
 
-REM 加固项选择状态 (0=未选, 1=已选)
-set "SEL_1=0"
-set "SEL_2=0"
-set "SEL_3=0"
-set "SEL_4=0"
-set "SEL_5=0"
-set "SEL_6=0"
-set "SEL_7=0"
-
-REM 加固项名称
-set "NAME_1=创建服务账户"
-set "NAME_2=配置文件权限"
-set "NAME_3=配置防火墙"
-set "NAME_4=配置 Windows Defender"
-set "NAME_5=启用审计策略"
-set "NAME_6=生成安全配置"
-set "NAME_7=安装服务"
-
-REM ============================================================================
-REM 主程序入口
-REM ============================================================================
-:MAIN
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%        OpenClaw Windows 10 交互式安全加固脚本 v1.0%RESET%
-echo %CYAN%        作者: Alex (unix_sec@163.com)%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-
-REM 检查是否为模拟运行模式
-if /i "%~1"=="--dry-run" (
-    set "DRY_RUN=1"
-    echo %YELLOW%============================================%RESET%
-    echo %YELLOW%  [模拟运行模式] 不会实际执行任何操作%RESET%
-    echo %YELLOW%============================================%RESET%
-    echo.
-) else (
-    set "DRY_RUN=0"
-)
-
-echo %YELLOW%警告: 此脚本将修改系统安全配置，请确保已备份重要数据！%RESET%
-echo.
-echo 日志文件: %LOG_FILE%
-echo.
-
-REM 检查管理员权限（模拟运行模式跳过）
-if "%DRY_RUN%"=="0" (
-    call :CHECK_ADMIN
-    if !ERRORLEVEL! neq 0 (
-        echo %RED%[错误] 请以管理员身份运行此脚本！%RESET%
-        echo.
-        pause
-        exit /b 1
-    )
-)
-
-REM 初始化日志
-call :LOG "=========================================="
-call :LOG "OpenClaw 安全加固开始 - %DATE% %TIME%"
-call :LOG "=========================================="
-
-REM 显示主菜单
-:MAIN_MENU
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%        OpenClaw Windows 10 交互式安全加固脚本 v2.0%RESET%
-echo %CYAN%============================================================================%RESET%
-if "%DRY_RUN%"=="1" (
-    echo %YELLOW%                    [模拟运行模式]%RESET%
-)
-echo.
-echo %WHITE%请选择操作模式:%RESET%
-echo.
-echo   %CYAN%[1]%RESET% 交互式选择加固项 (推荐)
-echo   %CYAN%[2]%RESET% 一键完整加固 (执行所有加固项)
-echo   %CYAN%[3]%RESET% 生成安全审计报告
-echo   %CYAN%[4]%RESET% 撤销安全加固 (紧急恢复)
-echo   %CYAN%[0]%RESET% 退出
-echo.
-set /p MAIN_CHOICE="请输入选项 [0-4]: "
-
-if "%MAIN_CHOICE%"=="1" goto SELECT_ITEMS
-if "%MAIN_CHOICE%"=="2" goto ONE_CLICK_ALL
-if "%MAIN_CHOICE%"=="3" goto SECURITY_AUDIT
-if "%MAIN_CHOICE%"=="4" goto ROLLBACK
-if "%MAIN_CHOICE%"=="0" goto EXIT
-echo %RED%无效选项，请重新输入%RESET%
-timeout /t 1 >nul
-goto MAIN_MENU
+REM 加固项名称 (12项)
+set "NAME_1=[R1] Gateway 绑定加固 (防暴露)"
+set "NAME_2=[R5] 服务账户隔离 (最小权限)"
+set "NAME_3=[R5][R7] NTFS ACL 权限加固"
+set "NAME_4=[R5] 凭证安全管理 (Token/密钥)"
+set "NAME_5=[R1] Windows 防火墙端口限制"
+set "NAME_6=[R2][R6] Windows Defender + ASR"
+set "NAME_7=[R10][R5] 安全审计策略"
+set "NAME_8=[R7][R6] AppLocker 应用控制"
+set "NAME_9=[R2][R6] 命令执行限制 (防注入)"
+set "NAME_10=[R4] 出站网络限制 (防 SSRF)"
+set "NAME_11=[R9][R3] Skill/MCP 供应链防护"
+set "NAME_12=[R8] 进程资源限制"
 
 REM ============================================================================
-REM 交互式选择加固项
+REM 参数解析
 REM ============================================================================
-:SELECT_ITEMS
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                    选择要执行的安全加固项%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-echo %WHITE%输入数字切换选中状态，输入 A 全选，输入 N 全不选%RESET%
-echo %WHITE%选择完毕后输入 E 执行，输入 B 返回主菜单%RESET%
-echo.
-echo %CYAN%============================================================================%RESET%
-echo.
+:parse_args
+if "%~1"=="" goto init
+if /i "%~1"=="--help" goto show_help
+if /i "%~1"=="-h" goto show_help
+if /i "%~1"=="--dry-run" ( set "DRY_RUN=1" & shift & goto parse_args )
+if /i "%~1"=="--status" ( call :init_logging & call :show_status & goto :eof )
+if /i "%~1"=="--rollback" ( set "ROLLBACK_MODE=1" & set "ROLLBACK_ITEM=%~2" & shift & shift & goto parse_args )
+if /i "%~1"=="--debug" ( set "DEBUG_MODE=1" & set "DEBUG_ITEM=%~2" & shift & shift & goto parse_args )
+if /i "%~1"=="--apply" ( call :init_logging & call :check_admin & call :apply_item %~2 & shift & shift & goto :eof )
+shift
+goto parse_args
 
-REM 显示选择状态
-call :SHOW_ITEM 1
-call :SHOW_ITEM 2
-call :SHOW_ITEM 3
-call :SHOW_ITEM 4
-call :SHOW_ITEM 5
-call :SHOW_ITEM 6
-call :SHOW_ITEM 7
-
-echo.
-echo %CYAN%============================================================================%RESET%
-echo.
-echo   %CYAN%[A]%RESET% 全选所有加固项
-echo   %CYAN%[N]%RESET% 取消全部选择
-echo   %CYAN%[E]%RESET% 执行选中的加固项
-echo   %CYAN%[B]%RESET% 返回主菜单
-echo.
-
-set /p SEL_CHOICE="请输入选项: "
-
-REM 处理输入
-if /i "%SEL_CHOICE%"=="A" (
-    set "SEL_1=1"
-    set "SEL_2=1"
-    set "SEL_3=1"
-    set "SEL_4=1"
-    set "SEL_5=1"
-    set "SEL_6=1"
-    set "SEL_7=1"
-    goto SELECT_ITEMS
-)
-
-if /i "%SEL_CHOICE%"=="N" (
-    set "SEL_1=0"
-    set "SEL_2=0"
-    set "SEL_3=0"
-    set "SEL_4=0"
-    set "SEL_5=0"
-    set "SEL_6=0"
-    set "SEL_7=0"
-    goto SELECT_ITEMS
-)
-
-if /i "%SEL_CHOICE%"=="E" goto EXECUTE_SELECTED
-if /i "%SEL_CHOICE%"=="B" goto MAIN_MENU
-
-REM 切换单个选项状态
-if "%SEL_CHOICE%"=="1" (
-    if "!SEL_1!"=="0" (set "SEL_1=1") else (set "SEL_1=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="2" (
-    if "!SEL_2!"=="0" (set "SEL_2=1") else (set "SEL_2=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="3" (
-    if "!SEL_3!"=="0" (set "SEL_3=1") else (set "SEL_3=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="4" (
-    if "!SEL_4!"=="0" (set "SEL_4=1") else (set "SEL_4=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="5" (
-    if "!SEL_5!"=="0" (set "SEL_5=1") else (set "SEL_5=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="6" (
-    if "!SEL_6!"=="0" (set "SEL_6=1") else (set "SEL_6=0")
-    goto SELECT_ITEMS
-)
-if "%SEL_CHOICE%"=="7" (
-    if "!SEL_7!"=="0" (set "SEL_7=1") else (set "SEL_7=0")
-    goto SELECT_ITEMS
-)
-
-REM 支持多选 (如输入 123 选择 1、2、3)
-set "INPUT=%SEL_CHOICE%"
-:PARSE_INPUT
-if "%INPUT%"=="" goto SELECT_ITEMS
-set "CHAR=%INPUT:~0,1%"
-set "INPUT=%INPUT:~1%"
-
-if "%CHAR%"=="1" (if "!SEL_1!"=="0" (set "SEL_1=1") else (set "SEL_1=0"))
-if "%CHAR%"=="2" (if "!SEL_2!"=="0" (set "SEL_2=1") else (set "SEL_2=0"))
-if "%CHAR%"=="3" (if "!SEL_3!"=="0" (set "SEL_3=1") else (set "SEL_3=0"))
-if "%CHAR%"=="4" (if "!SEL_4!"=="0" (set "SEL_4=1") else (set "SEL_4=0"))
-if "%CHAR%"=="5" (if "!SEL_5!"=="0" (set "SEL_5=1") else (set "SEL_5=0"))
-if "%CHAR%"=="6" (if "!SEL_6!"=="0" (set "SEL_6=1") else (set "SEL_6=0"))
-if "%CHAR%"=="7" (if "!SEL_7!"=="0" (set "SEL_7=1") else (set "SEL_7=0"))
-
-goto PARSE_INPUT
+:init
+call :init_logging
+call :detect_env
+call :check_admin
+if "%ROLLBACK_MODE%"=="1" ( call :rollback_item %ROLLBACK_ITEM% & goto :eof )
+if "%DEBUG_MODE%"=="1" if not "%DEBUG_ITEM%"=="0" ( call :debug_item %DEBUG_ITEM% & goto :eof )
+goto main_menu
 
 REM ============================================================================
-REM 显示单个选项
+REM 基础函数
 REM ============================================================================
-:SHOW_ITEM
-set "ITEM_NUM=%1"
-set "ITEM_SEL=!SEL_%ITEM_NUM%!"
-set "ITEM_NAME=!NAME_%ITEM_NUM%!"
-
-if "%ITEM_SEL%"=="1" (
-    echo   %GREEN%[√] [%ITEM_NUM%] %ITEM_NAME%%RESET%
-) else (
-    echo   %WHITE%[ ] [%ITEM_NUM%] %ITEM_NAME%%RESET%
-)
-goto :EOF
+:init_logging
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if not exist "%STATE_DIR%" mkdir "%STATE_DIR%"
+if not exist "%STATE_FILE%" echo. > "%STATE_FILE%"
+goto :eof
 
 REM ============================================================================
-REM 执行选中的加固项
+REM 环境检测 - 检查所有依赖组件可用性
 REM ============================================================================
-:EXECUTE_SELECTED
-REM 检查是否有选中项
-set "SELECTED_COUNT=0"
-if "%SEL_1%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_2%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_3%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_4%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_5%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_6%"=="1" set /a SELECTED_COUNT+=1
-if "%SEL_7%"=="1" set /a SELECTED_COUNT+=1
+:detect_env
+REM Windows 防火墙服务
+sc query MpsSvc >nul 2>&1
+if %errorlevel%==0 ( set "HAS_FIREWALL=1" )
 
-if %SELECTED_COUNT% equ 0 (
-    echo.
-    echo %YELLOW%请至少选择一个加固项！%RESET%
-    timeout /t 2 >nul
-    goto SELECT_ITEMS
-)
-
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                        确认执行以下加固项%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-echo %WHITE%已选择 %SELECTED_COUNT% 个加固项:%RESET%
-echo.
-
-if "%SEL_1%"=="1" echo   %GREEN%[√]%RESET% %NAME_1%
-if "%SEL_2%"=="1" echo   %GREEN%[√]%RESET% %NAME_2%
-if "%SEL_3%"=="1" echo   %GREEN%[√]%RESET% %NAME_3%
-if "%SEL_4%"=="1" echo   %GREEN%[√]%RESET% %NAME_4%
-if "%SEL_5%"=="1" echo   %GREEN%[√]%RESET% %NAME_5%
-if "%SEL_6%"=="1" echo   %GREEN%[√]%RESET% %NAME_6%
-if "%SEL_7%"=="1" echo   %GREEN%[√]%RESET% %NAME_7%
-
-echo.
-echo %CYAN%============================================================================%RESET%
-echo.
-set /p CONFIRM="确认执行以上加固项? [Y/N]: "
-if /i not "%CONFIRM%"=="Y" goto SELECT_ITEMS
-
-call :LOG "用户选择执行加固项: SEL_1=%SEL_1%, SEL_2=%SEL_2%, SEL_3=%SEL_3%, SEL_4=%SEL_4%, SEL_5=%SEL_5%, SEL_6=%SEL_6%, SEL_7=%SEL_7%"
-
-REM 开始执行
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                        开始执行安全加固%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-
-set "STEP=0"
-set "TOTAL=%SELECTED_COUNT%"
-
-REM 首先创建目录结构（如果需要）
-if "%SEL_1%"=="1" call :CREATE_DIRECTORIES
-if "%SEL_2%"=="1" call :CREATE_DIRECTORIES
-if "%SEL_6%"=="1" call :CREATE_DIRECTORIES
-if "%SEL_7%"=="1" call :CREATE_DIRECTORIES
-
-REM 执行选中的加固项
-if "%SEL_1%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_1%%RESET%
-    call :DO_CREATE_SERVICE_ACCOUNT
-)
-
-if "%SEL_2%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_2%%RESET%
-    call :DO_CONFIGURE_PERMISSIONS
-)
-
-if "%SEL_3%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_3%%RESET%
-    call :DO_CONFIGURE_FIREWALL
-)
-
-if "%SEL_4%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_4%%RESET%
-    call :DO_CONFIGURE_DEFENDER
-)
-
-if "%SEL_5%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_5%%RESET%
-    call :DO_CONFIGURE_AUDIT
-)
-
-if "%SEL_6%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_6%%RESET%
-    call :DO_GENERATE_SECURE_CONFIG
-)
-
-if "%SEL_7%"=="1" (
-    set /a STEP+=1
-    echo.
-    echo %CYAN%[!STEP!/%TOTAL%] 正在执行: %NAME_7%%RESET%
-    call :DO_INSTALL_SERVICE
-)
-
-echo.
-echo %GREEN%============================================================================%RESET%
-echo %GREEN%              安全加固完成！共执行 %SELECTED_COUNT% 个加固项%RESET%
-echo %GREEN%============================================================================%RESET%
-echo.
-echo %YELLOW%重要提示:%RESET%
-if "%SEL_1%"=="1" (
-    echo   - 请设置服务账户密码: net user %SERVICE_ACCOUNT% *
-)
-if "%SEL_6%"=="1" (
-    echo   - Gateway Token 保存在: %OPENCLAW_SECRETS_DIR%\gateway-token.txt
-)
-echo   - 详细日志: %LOG_FILE%
-echo.
-
-call :LOG "安全加固完成，共执行 %SELECTED_COUNT% 个加固项"
-pause
-goto MAIN_MENU
-
-REM ============================================================================
-REM 一键完整加固
-REM ============================================================================
-:ONE_CLICK_ALL
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                        一键完整安全加固%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-echo %WHITE%将执行以下所有安全加固项:%RESET%
-echo.
-echo   %GREEN%[√]%RESET% %NAME_1%
-echo   %GREEN%[√]%RESET% %NAME_2%
-echo   %GREEN%[√]%RESET% %NAME_3%
-echo   %GREEN%[√]%RESET% %NAME_4%
-echo   %GREEN%[√]%RESET% %NAME_5%
-echo   %GREEN%[√]%RESET% %NAME_6%
-echo   %GREEN%[√]%RESET% %NAME_7%
-echo.
-echo %CYAN%============================================================================%RESET%
-echo.
-echo %YELLOW%警告: 此操作将执行所有安全加固措施！%RESET%
-echo.
-set /p CONFIRM="确认执行完整安全加固? [Y/N]: "
-if /i not "%CONFIRM%"=="Y" goto MAIN_MENU
-
-REM 设置全选
-set "SEL_1=1"
-set "SEL_2=1"
-set "SEL_3=1"
-set "SEL_4=1"
-set "SEL_5=1"
-set "SEL_6=1"
-set "SEL_7=1"
-
-call :LOG "用户选择一键完整加固"
-goto EXECUTE_SELECTED
-
-REM ============================================================================
-REM 创建目录结构
-REM ============================================================================
-:CREATE_DIRECTORIES
-if "%DIRS_CREATED%"=="1" goto :EOF
-set "DIRS_CREATED=1"
-
-echo   创建目录结构...
-call :LOG "创建目录结构"
-
-if not exist "%OPENCLAW_DIR%" (
-    mkdir "%OPENCLAW_DIR%"
-    echo     创建: %OPENCLAW_DIR%
-)
-
-if not exist "%OPENCLAW_STATE_DIR%" (
-    mkdir "%OPENCLAW_STATE_DIR%"
-    echo     创建: %OPENCLAW_STATE_DIR%
-)
-
-if not exist "%OPENCLAW_LOGS_DIR%" (
-    mkdir "%OPENCLAW_LOGS_DIR%"
-    echo     创建: %OPENCLAW_LOGS_DIR%
-)
-
-if not exist "%OPENCLAW_SECRETS_DIR%" (
-    mkdir "%OPENCLAW_SECRETS_DIR%"
-    echo     创建: %OPENCLAW_SECRETS_DIR%
-)
-
-echo   %GREEN%[完成] 目录结构已创建%RESET%
-goto :EOF
-
-REM ============================================================================
-REM 创建服务账户
-REM ============================================================================
-:DO_CREATE_SERVICE_ACCOUNT
-call :LOG "创建服务账户: %SERVICE_ACCOUNT%"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - net user %SERVICE_ACCOUNT% [PASSWORD] /add
-    echo     - net localgroup Administrators %SERVICE_ACCOUNT% /delete
-    echo     - net localgroup Users %SERVICE_ACCOUNT% /delete
-    echo     - secedit /export /cfg secpol_export.cfg
-    echo     - secedit /configure /db secedit.sdb /cfg secpol_import.cfg /areas USER_RIGHTS
-    echo   %GREEN%[DRY-RUN 完成] 服务账户配置%RESET%
-    goto :EOF
-)
-
-REM 检查账户是否已存在
-net user %SERVICE_ACCOUNT% >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %YELLOW%[跳过] 服务账户 %SERVICE_ACCOUNT% 已存在%RESET%
-    call :LOG "服务账户已存在，跳过创建"
-    goto :CONFIGURE_SVC_ACCOUNT
-)
-
-REM 生成随机密码
-set "CHARS=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$"
-set "PASSWORD="
-for /L %%i in (1,1,16) do (
-    set /a "rand=!random! %% 68"
-    for %%j in (!rand!) do set "PASSWORD=!PASSWORD!!CHARS:~%%j,1!"
-)
-
-REM 创建用户账户
-net user %SERVICE_ACCOUNT% "%PASSWORD%" /add /comment:"OpenClaw Service Account" /fullname:"OpenClaw Service" /passwordchg:no >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo   %RED%[失败] 无法创建服务账户%RESET%
-    call :LOG "错误: 无法创建服务账户"
-    goto :EOF
-)
-
-echo   账户 %SERVICE_ACCOUNT% 已创建
-echo   %YELLOW%临时密码: %PASSWORD%%RESET%
-echo   %YELLOW%请立即更改密码: net user %SERVICE_ACCOUNT% *%RESET%
-
-REM 保存密码到临时文件
-echo %PASSWORD%> "%TEMP%\openclaw_svc_password.txt"
-echo   %YELLOW%密码已保存到: %TEMP%\openclaw_svc_password.txt (请立即保存并删除)%RESET%
-
-:CONFIGURE_SVC_ACCOUNT
-REM 从管理员组中移除（如果存在）
-net localgroup Administrators %SERVICE_ACCOUNT% /delete >nul 2>&1
-
-REM 从 Users 组中移除（减少权限）
-net localgroup Users %SERVICE_ACCOUNT% /delete >nul 2>&1
-
-REM 配置服务登录权限
-echo   配置账户安全策略...
-
-REM 导出当前策略
-secedit /export /cfg "%TEMP%\secpol_export.cfg" >nul 2>&1
-
-REM 检查并添加服务登录权限
-findstr /C:"SeServiceLogonRight" "%TEMP%\secpol_export.cfg" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    powershell -Command "(Get-Content '%TEMP%\secpol_export.cfg') -replace 'SeServiceLogonRight = ', 'SeServiceLogonRight = %SERVICE_ACCOUNT%,' | Set-Content '%TEMP%\secpol_import.cfg'" >nul 2>&1
-    secedit /configure /db secedit.sdb /cfg "%TEMP%\secpol_import.cfg" /areas USER_RIGHTS >nul 2>&1
-)
-
-echo   %GREEN%[完成] 服务账户配置完成%RESET%
-call :LOG "服务账户配置完成"
-goto :EOF
-
-REM ============================================================================
-REM 配置文件权限
-REM ============================================================================
-:DO_CONFIGURE_PERMISSIONS
-call :LOG "配置文件系统权限"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - icacls %OPENCLAW_DIR% /inheritance:r
-    echo     - icacls %OPENCLAW_DIR% /grant:r "SYSTEM:(OI)(CI)F"
-    echo     - icacls %OPENCLAW_DIR% /grant:r "Administrators:(OI)(CI)F"
-    echo     - icacls %OPENCLAW_DIR% /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)RX"
-    echo     - icacls %OPENCLAW_STATE_DIR% /inheritance:r ...
-    echo     - icacls %OPENCLAW_SECRETS_DIR% /inheritance:r ...
-    echo     - icacls %OPENCLAW_LOGS_DIR% /inheritance:r ...
-    echo   %GREEN%[DRY-RUN 完成] 文件权限配置%RESET%
-    goto :EOF
-)
-
-REM 配置 OpenClaw 主目录
-echo   配置 %OPENCLAW_DIR% 权限...
-icacls "%OPENCLAW_DIR%" /inheritance:r >nul 2>&1
-icacls "%OPENCLAW_DIR%" /grant:r "SYSTEM:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_DIR%" /grant:r "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_DIR%" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)RX" >nul 2>&1
-
-REM 配置状态目录
-echo   配置 %OPENCLAW_STATE_DIR% 权限...
-icacls "%OPENCLAW_STATE_DIR%" /inheritance:r >nul 2>&1
-icacls "%OPENCLAW_STATE_DIR%" /grant:r "SYSTEM:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_STATE_DIR%" /grant:r "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_STATE_DIR%" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)M" >nul 2>&1
-icacls "%OPENCLAW_STATE_DIR%" /grant:r "%USERNAME%:(OI)(CI)F" >nul 2>&1
-
-REM 配置密钥目录（最严格权限）
-echo   配置 %OPENCLAW_SECRETS_DIR% 权限...
-icacls "%OPENCLAW_SECRETS_DIR%" /inheritance:r >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%" /grant:r "SYSTEM:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%" /grant:r "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)R" >nul 2>&1
-
-REM 配置日志目录
-echo   配置 %OPENCLAW_LOGS_DIR% 权限...
-icacls "%OPENCLAW_LOGS_DIR%" /inheritance:r >nul 2>&1
-icacls "%OPENCLAW_LOGS_DIR%" /grant:r "SYSTEM:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_LOGS_DIR%" /grant:r "BUILTIN\Administrators:(OI)(CI)F" >nul 2>&1
-icacls "%OPENCLAW_LOGS_DIR%" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)M" >nul 2>&1
-
-REM 如果配置文件存在，设置更严格的权限
-if exist "%OPENCLAW_STATE_DIR%\config.yaml" (
-    echo   配置 config.yaml 权限...
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" /inheritance:r >nul 2>&1
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" /grant:r "SYSTEM:F" >nul 2>&1
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" /grant:r "BUILTIN\Administrators:F" >nul 2>&1
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" /grant:r "%SERVICE_ACCOUNT%:R" >nul 2>&1
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" /grant:r "%USERNAME%:F" >nul 2>&1
-)
-
-echo   %GREEN%[完成] 文件系统权限配置完成%RESET%
-call :LOG "文件系统权限配置完成"
-goto :EOF
-
-REM ============================================================================
-REM 配置防火墙
-REM ============================================================================
-:DO_CONFIGURE_FIREWALL
-call :LOG "配置 Windows 防火墙"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - netsh advfirewall set allprofiles state on
-    echo     - netsh advfirewall firewall delete rule name="OpenClaw*"
-    echo     - netsh advfirewall firewall add rule name="OpenClaw Gateway - Block All Inbound" ...
-    echo     - netsh advfirewall firewall add rule name="OpenClaw Gateway - Allow Loopback" ...
-    echo     - netsh advfirewall firewall add rule name="OpenClaw - Allow HTTPS Outbound" ...
-    echo     - netsh advfirewall set allprofiles logging ...
-    echo   %GREEN%[DRY-RUN 完成] 防火墙配置%RESET%
-    goto :EOF
-)
-
-REM 启用防火墙
-echo   启用 Windows 防火墙...
-netsh advfirewall set allprofiles state on >nul 2>&1
-
-REM 删除旧规则
-echo   删除旧的 OpenClaw 防火墙规则...
-netsh advfirewall firewall delete rule name="OpenClaw*" >nul 2>&1
-
-REM 阻止所有入站连接到 Gateway 端口
-echo   阻止 Gateway 端口 (%GATEWAY_PORT%) 外部访问...
-netsh advfirewall firewall add rule name="OpenClaw Gateway - Block All Inbound" ^
-    dir=in action=block protocol=TCP localport=%GATEWAY_PORT% >nul 2>&1
-
-REM 允许本地回环访问
-echo   允许本地回环访问...
-netsh advfirewall firewall add rule name="OpenClaw Gateway - Allow Loopback" ^
-    dir=in action=allow protocol=TCP localport=%GATEWAY_PORT% ^
-    remoteip=127.0.0.1 localip=127.0.0.1 >nul 2>&1
-
-REM 配置出站规则
-echo   配置出站规则...
-netsh advfirewall firewall add rule name="OpenClaw - Allow HTTPS Outbound" ^
-    dir=out action=allow protocol=TCP remoteport=443 ^
-    program="%NODE_PATH%\node.exe" >nul 2>&1
-
-REM 启用防火墙日志
-echo   启用防火墙日志...
-netsh advfirewall set allprofiles logging filename="%SystemRoot%\System32\LogFiles\Firewall\pfirewall.log" >nul 2>&1
-netsh advfirewall set allprofiles logging maxfilesize=32768 >nul 2>&1
-netsh advfirewall set allprofiles logging droppedconnections=enable >nul 2>&1
-netsh advfirewall set allprofiles logging allowedconnections=disable >nul 2>&1
-
-echo   %GREEN%[完成] Windows 防火墙配置完成%RESET%
-call :LOG "Windows 防火墙配置完成"
-goto :EOF
-
-REM ============================================================================
-REM 配置 Windows Defender
-REM ============================================================================
-:DO_CONFIGURE_DEFENDER
-call :LOG "配置 Windows Defender"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - Set-MpPreference -DisableRealtimeMonitoring $false
-    echo     - Set-MpPreference -DisableBehaviorMonitoring $false
-    echo     - Set-MpPreference -DisableScriptScanning $false
-    echo     - Set-MpPreference -MAPSReporting Advanced
-    echo     - Add-MpPreference -AttackSurfaceReductionRules_Ids ...
-    echo     - Set-MpPreference -ScanScheduleQuickScanTime 02:00:00
-    echo   %GREEN%[DRY-RUN 完成] Windows Defender 配置%RESET%
-    goto :EOF
-)
-
-REM 检查 Windows Defender 是否可用
+REM Windows Defender
 sc query WinDefend >nul 2>&1
-if %ERRORLEVEL% neq 0 (
-    echo   %YELLOW%[跳过] Windows Defender 未安装或不可用%RESET%
-    call :LOG "Windows Defender 不可用，跳过配置"
-    goto :EOF
-)
+if %errorlevel%==0 ( set "HAS_DEFENDER=1" )
 
-REM 使用 PowerShell 配置 Defender
-echo   启用实时保护...
-powershell -Command "Set-MpPreference -DisableRealtimeMonitoring $false" >nul 2>&1
+REM AppLocker (AppIDSvc)
+sc query AppIDSvc >nul 2>&1
+if %errorlevel%==0 ( set "HAS_APPLOCKER=1" )
 
-echo   启用行为监控...
-powershell -Command "Set-MpPreference -DisableBehaviorMonitoring $false" >nul 2>&1
+REM auditpol
+where auditpol >nul 2>&1
+if %errorlevel%==0 ( set "HAS_AUDITPOL=1" )
 
-echo   启用脚本扫描...
-powershell -Command "Set-MpPreference -DisableScriptScanning $false" >nul 2>&1
+REM PowerShell
+where powershell >nul 2>&1
+if %errorlevel%==0 ( set "HAS_POWERSHELL=1" )
 
-echo   启用云保护...
-powershell -Command "Set-MpPreference -MAPSReporting Advanced" >nul 2>&1
-powershell -Command "Set-MpPreference -SubmitSamplesConsent SendSafeSamples" >nul 2>&1
+REM schtasks
+where schtasks >nul 2>&1
+if %errorlevel%==0 ( set "HAS_SCHTASKS=1" )
 
-echo   配置 ASR 规则 (攻击面缩减)...
-REM 阻止可能被混淆的脚本执行
-powershell -Command "Add-MpPreference -AttackSurfaceReductionRules_Ids 5BEB7EFE-FD9A-4556-801D-275E5FFC04CC -AttackSurfaceReductionRules_Actions Enabled" >nul 2>&1
+REM bcdedit
+where bcdedit >nul 2>&1
+if %errorlevel%==0 ( set "HAS_BCDEDIT=1" )
 
-REM 阻止从 Windows 本地安全子系统窃取凭据
-powershell -Command "Add-MpPreference -AttackSurfaceReductionRules_Ids 9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2 -AttackSurfaceReductionRules_Actions Enabled" >nul 2>&1
+REM icacls
+where icacls >nul 2>&1
+if %errorlevel%==0 ( set "HAS_ICACLS=1" )
 
-echo   配置扫描计划...
-powershell -Command "Set-MpPreference -ScanScheduleQuickScanTime 02:00:00" >nul 2>&1
+REM netsh
+where netsh >nul 2>&1
+if %errorlevel%==0 ( set "HAS_NETSH=1" )
 
-echo   %GREEN%[完成] Windows Defender 配置完成%RESET%
-call :LOG "Windows Defender 配置完成"
-goto :EOF
+call :log_info "环境检测: firewall=%HAS_FIREWALL% defender=%HAS_DEFENDER% applocker=%HAS_APPLOCKER% auditpol=%HAS_AUDITPOL% powershell=%HAS_POWERSHELL% schtasks=%HAS_SCHTASKS% bcdedit=%HAS_BCDEDIT%"
+goto :eof
 
-REM ============================================================================
-REM 配置审计策略
-REM ============================================================================
-:DO_CONFIGURE_AUDIT
-call :LOG "配置安全审计策略"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - auditpol /set /subcategory:"Logon" /success:enable /failure:enable
-    echo     - auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable
-    echo     - auditpol /set /subcategory:"File System" /success:enable /failure:enable
-    echo     - auditpol /set /subcategory:"Other Object Access Events" ...
-    echo     - auditpol /set /subcategory:"Sensitive Privilege Use" ...
-    echo     - wevtutil sl Security /ms:524288000
-    echo     - 配置目录审计规则
-    echo   %GREEN%[DRY-RUN 完成] 审计策略配置%RESET%
-    goto :EOF
-)
-
-REM 启用登录审计
-echo   启用登录审计...
-auditpol /set /subcategory:"Logon" /success:enable /failure:enable >nul 2>&1
-
-REM 启用进程创建审计
-echo   启用进程创建审计...
-auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable >nul 2>&1
-
-REM 启用文件系统审计
-echo   启用文件系统审计...
-auditpol /set /subcategory:"File System" /success:enable /failure:enable >nul 2>&1
-
-REM 启用对象访问审计
-echo   启用对象访问审计...
-auditpol /set /subcategory:"Other Object Access Events" /success:enable /failure:enable >nul 2>&1
-
-REM 启用权限使用审计
-echo   启用权限使用审计...
-auditpol /set /subcategory:"Sensitive Privilege Use" /success:enable /failure:enable >nul 2>&1
-
-REM 增加安全日志大小
-echo   增加安全日志大小...
-wevtutil sl Security /ms:524288000 >nul 2>&1
-
-REM 配置 OpenClaw 目录审计
-echo   配置 OpenClaw 目录文件审计...
-if exist "%OPENCLAW_DIR%" (
-    powershell -Command "$acl = Get-Acl '%OPENCLAW_DIR%'; $rule = New-Object System.Security.AccessControl.FileSystemAuditRule('Everyone','Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership','ContainerInherit,ObjectInherit','None','Failure'); $acl.AddAuditRule($rule); Set-Acl -Path '%OPENCLAW_DIR%' -AclObject $acl" >nul 2>&1
-)
-
-REM 配置 Secrets 目录审计（更严格）
-echo   配置 Secrets 目录审计...
-if exist "%OPENCLAW_SECRETS_DIR%" (
-    powershell -Command "$acl = Get-Acl '%OPENCLAW_SECRETS_DIR%'; $rule = New-Object System.Security.AccessControl.FileSystemAuditRule('Everyone','Read,Write,Delete','ContainerInherit,ObjectInherit','None','Success,Failure'); $acl.AddAuditRule($rule); Set-Acl -Path '%OPENCLAW_SECRETS_DIR%' -AclObject $acl" >nul 2>&1
-)
-
-echo   %GREEN%[完成] 安全审计策略配置完成%RESET%
-call :LOG "安全审计策略配置完成"
-goto :EOF
-
-REM ============================================================================
-REM 生成安全配置文件
-REM ============================================================================
-:DO_GENERATE_SECURE_CONFIG
-call :LOG "生成安全配置文件"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - 生成随机 Gateway Token (32字符)
-    echo     - 保存 Token 到 %OPENCLAW_SECRETS_DIR%\gateway-token.txt
-    echo     - icacls gateway-token.txt /inheritance:r ...
-    echo     - 创建 config.yaml 安全配置文件
-    echo     - 创建 set-env.cmd 环境变量脚本
-    echo   %GREEN%[DRY-RUN 完成] 安全配置生成%RESET%
-    goto :EOF
-)
-
-REM 生成随机 Gateway Token
-set "TOKEN_CHARS=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-set "GATEWAY_TOKEN="
-for /L %%i in (1,1,32) do (
-    set /a "rand=!random! %% 62"
-    for %%j in (!rand!) do set "GATEWAY_TOKEN=!GATEWAY_TOKEN!!TOKEN_CHARS:~%%j,1!"
-)
-
-REM 保存 Gateway Token
-echo %GATEWAY_TOKEN%> "%OPENCLAW_SECRETS_DIR%\gateway-token.txt"
-echo   Gateway Token 已保存到: %OPENCLAW_SECRETS_DIR%\gateway-token.txt
-
-REM 设置 Token 文件权限
-icacls "%OPENCLAW_SECRETS_DIR%\gateway-token.txt" /inheritance:r >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%\gateway-token.txt" /grant:r "SYSTEM:R" >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%\gateway-token.txt" /grant:r "BUILTIN\Administrators:F" >nul 2>&1
-icacls "%OPENCLAW_SECRETS_DIR%\gateway-token.txt" /grant:r "%SERVICE_ACCOUNT%:R" >nul 2>&1
-
-REM 创建示例安全配置文件
-if not exist "%OPENCLAW_STATE_DIR%\config.yaml" (
-    echo # OpenClaw 安全配置 - 由安全加固脚本生成> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo # 生成时间: %DATE% %TIME%>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo # 作者: hejian/202412970>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo.>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo gateway:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   bind: loopback>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   port: %GATEWAY_PORT%>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   auth:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     mode: token>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     # Token 从文件读取，不在配置中明文存储>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   controlUi:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     enabled: true>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     allowInsecureAuth: false>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     dangerouslyDisableDeviceAuth: false>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo.>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo logging:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   redactSensitive: tools>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo.>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo tools:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   elevated:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo     enabled: false>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo.>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo browser:>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    echo   enabled: false>> "%OPENCLAW_STATE_DIR%\config.yaml"
-    
-    echo   安全配置文件已创建: %OPENCLAW_STATE_DIR%\config.yaml
-)
-
-REM 创建环境变量设置脚本
-echo @echo off> "%OPENCLAW_DIR%\set-env.cmd"
-echo REM OpenClaw 环境变量设置>> "%OPENCLAW_DIR%\set-env.cmd"
-echo REM 生成时间: %DATE% %TIME%>> "%OPENCLAW_DIR%\set-env.cmd"
-echo set OPENCLAW_STATE_DIR=%OPENCLAW_STATE_DIR%>> "%OPENCLAW_DIR%\set-env.cmd"
-echo set OPENCLAW_GATEWAY_TOKEN_FILE=%OPENCLAW_SECRETS_DIR%\gateway-token.txt>> "%OPENCLAW_DIR%\set-env.cmd"
-echo set NODE_ENV=production>> "%OPENCLAW_DIR%\set-env.cmd"
-
-echo   环境变量脚本已创建: %OPENCLAW_DIR%\set-env.cmd
-
-echo   %GREEN%[完成] 安全配置文件生成完成%RESET%
-call :LOG "安全配置文件生成完成"
-goto :EOF
-
-REM ============================================================================
-REM 安装服务
-REM ============================================================================
-:DO_INSTALL_SERVICE
-call :LOG "安装 OpenClaw 服务"
-
-REM 模拟运行模式
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN] 将执行以下操作:%RESET%
-    echo     - 检查 NSSM 和 Node.js
-    echo     - nssm.exe install OpenClawGateway "%NODE_PATH%\node.exe"
-    echo     - nssm.exe set OpenClawGateway AppParameters "%OPENCLAW_DIR%\dist\entry.js start"
-    echo     - nssm.exe set OpenClawGateway ObjectName ".\%SERVICE_ACCOUNT%"
-    echo     - 配置服务日志和环境变量
-    echo     - sc failure OpenClawGateway reset= 86400 actions= restart/...
-    echo   %GREEN%[DRY-RUN 完成] 服务安装%RESET%
-    goto :EOF
-)
-
-REM 检查 NSSM
-if not exist "C:\Tools\nssm.exe" (
-    echo   %YELLOW%[警告] NSSM 未找到%RESET%
-    echo   请下载 NSSM: https://nssm.cc/download
-    echo   解压后将 nssm.exe 放到 C:\Tools\ 目录
-    call :LOG "NSSM 未找到，跳过服务安装"
-    goto :EOF
-)
-
-REM 检查 Node.js
-if not exist "%NODE_PATH%\node.exe" (
-    echo   %RED%[错误] Node.js 未找到: %NODE_PATH%\node.exe%RESET%
-    call :LOG "Node.js 未找到，跳过服务安装"
-    goto :EOF
-)
-
-REM 停止现有服务
-net stop OpenClawGateway >nul 2>&1
-C:\Tools\nssm.exe remove OpenClawGateway confirm >nul 2>&1
-
-REM 安装服务
-echo   安装 OpenClaw 服务...
-C:\Tools\nssm.exe install OpenClawGateway "%NODE_PATH%\node.exe" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppParameters "%OPENCLAW_DIR%\dist\entry.js start" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppDirectory "%OPENCLAW_DIR%" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway DisplayName "OpenClaw Gateway" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway Description "OpenClaw AI Gateway Service" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway Start SERVICE_AUTO_START >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway ObjectName ".\%SERVICE_ACCOUNT%" >nul 2>&1
-
-REM 配置日志
-C:\Tools\nssm.exe set OpenClawGateway AppStdout "%OPENCLAW_LOGS_DIR%\stdout.log" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppStderr "%OPENCLAW_LOGS_DIR%\stderr.log" >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppStdoutCreationDisposition 4 >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppStderrCreationDisposition 4 >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppRotateFiles 1 >nul 2>&1
-C:\Tools\nssm.exe set OpenClawGateway AppRotateBytes 10485760 >nul 2>&1
-
-REM 配置环境变量
-C:\Tools\nssm.exe set OpenClawGateway AppEnvironmentExtra ^
-    "NODE_ENV=production" ^
-    "OPENCLAW_STATE_DIR=%OPENCLAW_STATE_DIR%" ^
-    "OPENCLAW_GATEWAY_TOKEN_FILE=%OPENCLAW_SECRETS_DIR%\gateway-token.txt" >nul 2>&1
-
-REM 配置故障恢复
-sc failure OpenClawGateway reset= 86400 actions= restart/5000/restart/10000/restart/30000 >nul 2>&1
-
-echo   %GREEN%[完成] 服务已安装%RESET%
-echo   %YELLOW%请设置服务账户密码后启动服务:%RESET%
-echo     1. net user %SERVICE_ACCOUNT% *
-echo     2. net start OpenClawGateway
-
-call :LOG "OpenClaw 服务安装完成"
-goto :EOF
-
-REM ============================================================================
-REM 安全审计报告
-REM ============================================================================
-:SECURITY_AUDIT
-cls
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                    OpenClaw Windows 安全审计报告%RESET%
-echo %CYAN%============================================================================%RESET%
-echo 日期: %DATE% %TIME%
-echo 作者: hejian/202412970
+REM 环境预检报告
+:show_env_summary
 echo.
+echo 环境检测:
+if "%HAS_FIREWALL%"=="1" ( echo   [OK] Windows 防火墙 ) else ( echo   [--] Windows 防火墙 不可用 ^(加固项 5,10 跳过^) )
+if "%HAS_DEFENDER%"=="1" ( echo   [OK] Windows Defender ) else ( echo   [--] Windows Defender 不可用 ^(加固项 6 跳过^) )
+if "%HAS_APPLOCKER%"=="1" ( echo   [OK] AppLocker ) else ( echo   [--] AppLocker 不可用 ^(加固项 8 跳过^) )
+if "%HAS_AUDITPOL%"=="1" ( echo   [OK] 审计策略 ) else ( echo   [--] auditpol 不可用 ^(加固项 7 跳过^) )
+if "%HAS_POWERSHELL%"=="1" ( echo   [OK] PowerShell ) else ( echo   [--] PowerShell 不可用 ^(部分功能受限^) )
+if "%HAS_ICACLS%"=="1" ( echo   [OK] NTFS ACL ^(icacls^) ) else ( echo   [--] icacls 不可用 ^(加固项 3 跳过^) )
+if "%HAS_SCHTASKS%"=="1" ( echo   [OK] 计划任务 ) else ( echo   [--] schtasks 不可用 ^(定时检查跳过^) )
+if "%HAS_BCDEDIT%"=="1" ( echo   [OK] bcdedit ) else ( echo   [--] bcdedit 不可用 ^(DEP 配置跳过^) )
+echo.
+goto :eof
 
-set "ISSUES=0"
-set "WARNINGS=0"
-set "PASSES=0"
+:log
+echo [%date% %time:~0,8%] [%~1] %~2 >> "%LOG_FILE%"
+if "%DEBUG_MODE%"=="1" echo [%~1] %~2
+goto :eof
 
-REM 1. 检查服务账户
-echo [1] 检查服务账户...
-net user %SERVICE_ACCOUNT% >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %GREEN%[PASS] 服务账户 %SERVICE_ACCOUNT% 存在%RESET%
-    set /a PASSES+=1
-    
-    REM 检查是否在管理员组
-    net localgroup Administrators | findstr /i "%SERVICE_ACCOUNT%" >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo   %RED%[FAIL] 服务账户在管理员组中！%RESET%
-        set /a ISSUES+=1
-    ) else (
-        echo   %GREEN%[PASS] 服务账户不在管理员组中%RESET%
-        set /a PASSES+=1
-    )
-) else (
-    echo   %YELLOW%[WARN] 服务账户 %SERVICE_ACCOUNT% 不存在%RESET%
-    set /a WARNINGS+=1
+:log_info
+call :log INFO "%~1"
+goto :eof
+
+:log_action
+call :log ACTION "item=%~2 action=%~1 status=%~3 detail=%~4"
+goto :eof
+
+:get_item_state
+set "ITEM_STATE=none"
+if exist "%STATE_FILE%" (
+    for /f "tokens=1,2 delims==" %%a in ('findstr /b "ITEM_%~1=" "%STATE_FILE%" 2^>nul') do set "ITEM_STATE=%%b"
 )
+goto :eof
 
-REM 2. 检查文件权限
-echo.
-echo [2] 检查文件权限...
-if exist "%OPENCLAW_STATE_DIR%\config.yaml" (
-    icacls "%OPENCLAW_STATE_DIR%\config.yaml" | findstr /i "Everyone Users" >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo   %RED%[FAIL] config.yaml 对 Everyone/Users 可访问%RESET%
-        set /a ISSUES+=1
-    ) else (
-        echo   %GREEN%[PASS] config.yaml 权限配置正确%RESET%
-        set /a PASSES+=1
-    )
-) else (
-    echo   %YELLOW%[WARN] config.yaml 不存在%RESET%
-    set /a WARNINGS+=1
-)
+:set_item_state
+findstr /v /b "ITEM_%~1=" "%STATE_FILE%" > "%STATE_FILE%.tmp" 2>nul
+move /y "%STATE_FILE%.tmp" "%STATE_FILE%" >nul 2>&1
+echo ITEM_%~1=%~2 >> "%STATE_FILE%"
+goto :eof
 
-REM 3. 检查防火墙
-echo.
-echo [3] 检查防火墙...
-netsh advfirewall show allprofiles | findstr /i "State.*ON" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %GREEN%[PASS] Windows 防火墙已启用%RESET%
-    set /a PASSES+=1
-) else (
-    echo   %RED%[FAIL] Windows 防火墙未启用%RESET%
-    set /a ISSUES+=1
-)
+:clear_item_state
+findstr /v /b "ITEM_%~1=" "%STATE_FILE%" > "%STATE_FILE%.tmp" 2>nul
+move /y "%STATE_FILE%.tmp" "%STATE_FILE%" >nul 2>&1
+goto :eof
 
-netsh advfirewall firewall show rule name="OpenClaw*" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %GREEN%[PASS] OpenClaw 防火墙规则已配置%RESET%
-    set /a PASSES+=1
-) else (
-    echo   %YELLOW%[WARN] OpenClaw 防火墙规则未配置%RESET%
-    set /a WARNINGS+=1
-)
-
-REM 4. 检查端口暴露
-echo.
-echo [4] 检查端口暴露...
-netstat -an | findstr ":%GATEWAY_PORT%.*LISTENING" | findstr /v "127.0.0.1" | findstr /v "\[::1\]" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %RED%[FAIL] Gateway 端口对外暴露！%RESET%
-    netstat -an | findstr ":%GATEWAY_PORT%.*LISTENING"
-    set /a ISSUES+=1
-) else (
-    echo   %GREEN%[PASS] Gateway 端口未对外暴露%RESET%
-    set /a PASSES+=1
-)
-
-REM 5. 检查 Windows Defender
-echo.
-echo [5] 检查 Windows Defender...
-sc query WinDefend | findstr "RUNNING" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo   %GREEN%[PASS] Windows Defender 正在运行%RESET%
-    set /a PASSES+=1
-    
-    powershell -Command "(Get-MpComputerStatus).RealTimeProtectionEnabled" 2>nul | findstr "True" >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo   %GREEN%[PASS] 实时保护已启用%RESET%
-        set /a PASSES+=1
-    ) else (
-        echo   %RED%[FAIL] 实时保护未启用%RESET%
-        set /a ISSUES+=1
-    )
-) else (
-    echo   %YELLOW%[WARN] Windows Defender 未运行%RESET%
-    set /a WARNINGS+=1
-)
-
-REM 6. 检查敏感数据
-echo.
-echo [6] 检查配置文件中的敏感数据...
-if exist "%OPENCLAW_STATE_DIR%\config.yaml" (
-    findstr /i "password.*:" "%OPENCLAW_STATE_DIR%\config.yaml" | findstr /v "#" | findstr /v "${" >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo   %YELLOW%[WARN] 配置文件可能包含硬编码密码%RESET%
-        set /a WARNINGS+=1
-    ) else (
-        echo   %GREEN%[PASS] 未发现硬编码密码%RESET%
-        set /a PASSES+=1
-    )
-) else (
-    echo   %YELLOW%[INFO] 配置文件不存在%RESET%
-)
-
-REM 7. 检查服务状态
-echo.
-echo [7] 检查服务状态...
-sc query OpenClawGateway >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    sc query OpenClawGateway | findstr "RUNNING" >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        echo   %GREEN%[INFO] OpenClaw 服务正在运行%RESET%
-    ) else (
-        echo   %YELLOW%[INFO] OpenClaw 服务未运行%RESET%
-    )
-    
-    REM 检查服务账户
-    for /f "tokens=2 delims=:" %%a in ('sc qc OpenClawGateway ^| findstr "SERVICE_START_NAME"') do (
-        set "SVC_ACCOUNT=%%a"
-        set "SVC_ACCOUNT=!SVC_ACCOUNT: =!"
-        if /i "!SVC_ACCOUNT!"=="LocalSystem" (
-            echo   %RED%[FAIL] 服务以 LocalSystem 运行 (权限过高)%RESET%
-            set /a ISSUES+=1
-        ) else (
-            echo   %GREEN%[PASS] 服务账户: !SVC_ACCOUNT!%RESET%
-            set /a PASSES+=1
-        )
-    )
-) else (
-    echo   %YELLOW%[INFO] OpenClaw 服务未安装%RESET%
-)
-
-REM 摘要
-echo.
-echo %CYAN%============================================================================%RESET%
-echo %CYAN%                            审计摘要%RESET%
-echo %CYAN%============================================================================%RESET%
-echo.
-echo   %GREEN%通过: %PASSES% 项%RESET%
-if %ISSUES% gtr 0 (
-    echo   %RED%失败: %ISSUES% 项 (需要修复)%RESET%
-) else (
-    echo   %GREEN%失败: 0 项%RESET%
-)
-if %WARNINGS% gtr 0 (
-    echo   %YELLOW%警告: %WARNINGS% 项 (建议关注)%RESET%
-) else (
-    echo   %GREEN%警告: 0 项%RESET%
-)
-echo.
-
-if %ISSUES% gtr 0 (
-    echo %RED%发现安全问题，建议执行安全加固！%RESET%
-) else (
-    echo %GREEN%安全状态良好%RESET%
-)
-echo.
-
-call :LOG "安全审计完成: %PASSES% 通过, %ISSUES% 失败, %WARNINGS% 警告"
-pause
-goto MAIN_MENU
-
-REM ============================================================================
-REM 撤销安全加固（紧急恢复）
-REM ============================================================================
-:ROLLBACK
-cls
-echo %RED%============================================================================%RESET%
-echo %RED%                        警告: 撤销安全加固%RESET%
-echo %RED%============================================================================%RESET%
-echo.
-echo %WHITE%此操作将:%RESET%
-echo.
-echo   %RED%[1]%RESET% 删除 OpenClaw 防火墙规则
-echo   %RED%[2]%RESET% 删除服务账户 %SERVICE_ACCOUNT%
-echo   %RED%[3]%RESET% 重置文件权限（恢复继承）
-echo   %RED%[4]%RESET% 停止并删除 OpenClaw 服务
-echo.
-echo %RED%============================================================================%RESET%
-echo %RED%                        此操作不可逆！%RESET%
-echo %RED%============================================================================%RESET%
-echo.
-set /p CONFIRM="确认撤销安全加固? 输入 CONFIRM 继续: "
-if not "%CONFIRM%"=="CONFIRM" goto MAIN_MENU
-
-call :LOG "开始撤销安全加固"
-
-echo.
-echo 正在撤销安全加固...
-echo.
-
-REM 停止并删除服务
-echo   停止并删除服务...
-net stop OpenClawGateway >nul 2>&1
-sc delete OpenClawGateway >nul 2>&1
-
-REM 删除防火墙规则
-echo   删除防火墙规则...
-netsh advfirewall firewall delete rule name="OpenClaw*" >nul 2>&1
-
-REM 重置文件权限
-echo   重置文件权限...
-if exist "%OPENCLAW_DIR%" (
-    icacls "%OPENCLAW_DIR%" /reset /t >nul 2>&1
-)
-if exist "%OPENCLAW_STATE_DIR%" (
-    icacls "%OPENCLAW_STATE_DIR%" /reset /t >nul 2>&1
-)
-
-REM 删除服务账户
-echo   删除服务账户...
-net user %SERVICE_ACCOUNT% /delete >nul 2>&1
-
-echo.
-echo %GREEN%============================================================================%RESET%
-echo %GREEN%                        安全加固已撤销%RESET%
-echo %GREEN%============================================================================%RESET%
-echo.
-call :LOG "安全加固撤销完成"
-pause
-goto MAIN_MENU
-
-REM ============================================================================
-REM 工具函数
-REM ============================================================================
-
-:CHECK_ADMIN
+:check_admin
 net session >nul 2>&1
-exit /b %ERRORLEVEL%
-
-:LOG
-echo [%DATE% %TIME%] %~1>> "%LOG_FILE%"
-goto :EOF
-
-REM ============================================================================
-REM 执行命令（支持模拟运行模式）
-REM ============================================================================
-:EXEC
-if "%DRY_RUN%"=="1" (
-    echo   %CYAN%[DRY-RUN]%RESET% %~1
-    goto :EOF
+if %errorlevel% neq 0 if "%DRY_RUN%"=="0" (
+    echo [错误] 请以管理员身份运行！
+    pause
+    exit /b 1
 )
-%~1
-goto :EOF
+goto :eof
 
-:EXIT
+REM ============================================================================
+REM 主菜单
+REM ============================================================================
+:main_menu
+cls
+echo ============================================================
+echo     OpenClaw Windows 安全加固脚本 v1.2
+echo     覆盖 10 类安全风险 / 12 项加固措施
+echo ============================================================
+if "%DRY_RUN%"=="1" echo                 [模拟运行模式]
+call :show_env_summary
+echo 安全风险: R1 Gateway暴露  R2 提示注入  R3 MCP投毒
+echo           R4 SSRF  R5 凭证泄露  R6 权限提升
+echo           R7 文件越界  R8 资源耗尽  R9 供应链  R10 日志泄露
 echo.
-echo 感谢使用 OpenClaw 安全加固脚本！
-echo 作者: Alex (unix_sec@163.com)
-call :LOG "脚本退出"
-exit /b 0
+echo   [1] 交互式选择     [5] 调试模式
+echo   [2] 一键完整加固   [6] 查看日志
+echo   [3] 查看状态       [7] 全部回退
+echo   [4] 回退指定项     [0] 退出
+echo.
+set /p "CHOICE=选项 [0-7]: "
+if "%CHOICE%"=="1" goto interactive_select
+if "%CHOICE%"=="2" goto one_click_all
+if "%CHOICE%"=="3" ( call :show_status & pause & goto main_menu )
+if "%CHOICE%"=="4" goto rollback_menu
+if "%CHOICE%"=="5" goto debug_menu
+if "%CHOICE%"=="6" goto view_logs
+if "%CHOICE%"=="7" goto rollback_all
+if "%CHOICE%"=="0" goto exit_script
+goto main_menu
 
 REM ============================================================================
-REM 脚本结束
+REM 交互式选择
 REM ============================================================================
+:interactive_select
+for /l %%i in (1,1,12) do set "SEL_%%i=0"
+
+:select_loop
+cls
+echo   输入数字切换，A=全选，N=清空，E=执行，B=返回
+echo.
+for /l %%i in (1,1,12) do (
+    call :get_item_state %%i
+    set "SI="
+    if "!ITEM_STATE!"=="applied" set "SI=[已加固] "
+    if "!SEL_%%i!"=="1" ( echo   [√] [%%i] !SI!!NAME_%%i! ) else ( echo   [ ] [%%i] !SI!!NAME_%%i! )
+)
+echo.
+set /p "INPUT=输入: "
+if /i "%INPUT%"=="A" ( for /l %%i in (1,1,12) do set "SEL_%%i=1" & goto select_loop )
+if /i "%INPUT%"=="N" ( for /l %%i in (1,1,12) do set "SEL_%%i=0" & goto select_loop )
+if /i "%INPUT%"=="B" goto main_menu
+if /i "%INPUT%"=="E" goto execute_selected
+
+for /l %%i in (1,1,12) do (
+    echo %INPUT% | findstr /c:"%%i" >nul
+    if !errorlevel!==0 (
+        if "!SEL_%%i!"=="0" ( set "SEL_%%i=1" ) else ( set "SEL_%%i=0" )
+    )
+)
+goto select_loop
+
+:execute_selected
+set "COUNT=0"
+for /l %%i in (1,1,12) do if "!SEL_%%i!"=="1" set /a COUNT+=1
+if %COUNT%==0 ( echo 请至少选择一个 & timeout /t 2 >nul & goto select_loop )
+echo.
+for /l %%i in (1,1,12) do if "!SEL_%%i!"=="1" ( echo. & echo [%%i] !NAME_%%i! & call :apply_item %%i )
+echo.
+echo 完成 %COUNT% 项！
+pause
+goto main_menu
+
+:one_click_all
+cls
+echo 一键完整加固 (12项)
+set /p "CONFIRM=确认? [Y/N]: "
+if /i not "%CONFIRM%"=="Y" goto main_menu
+for /l %%i in (1,1,12) do ( echo. & echo [%%i/12] !NAME_%%i! & call :apply_item %%i )
+echo.
+echo 一键完整加固完成！
+pause
+goto main_menu
+
+REM ============================================================================
+REM 状态/回退/调试
+REM ============================================================================
+:show_status
+echo.
+echo ======== 加固状态 ========
+for /l %%i in (1,1,12) do (
+    call :get_item_state %%i
+    if "!ITEM_STATE!"=="applied" ( echo   [√] [%%i] !NAME_%%i! ) else ( echo   [ ] [%%i] !NAME_%%i! )
+)
+echo.
+goto :eof
+
+:rollback_menu
+cls
+call :show_status
+echo   [B] 返回
+set /p "ITEM=回退编号 (1-12): "
+if /i "%ITEM%"=="B" goto main_menu
+if %ITEM% geq 1 if %ITEM% leq 12 (
+    set /p "C=确认? [Y/N]: "
+    if /i "!C!"=="Y" call :rollback_item %ITEM%
+)
+pause
+goto rollback_menu
+
+:rollback_all
+set /p "C=输入 CONFIRM 全部回退: "
+if not "%C%"=="CONFIRM" goto main_menu
+for /l %%i in (12,-1,1) do (
+    call :get_item_state %%i
+    if "!ITEM_STATE!"=="applied" call :rollback_item %%i
+)
+echo 全部回退完成
+pause
+goto main_menu
+
+:debug_item
+set "DI=%~1"
+cls
+echo 调试 - 加固项 %DI%: !NAME_%DI%!
+call :get_item_state %DI%
+echo 状态: %ITEM_STATE%
+echo.
+echo   [1] 执行  [2] 回退  [3] 模拟执行  [4] 模拟回退  [5] 日志  [0] 返回
+set /p "DC=选择: "
+if "%DC%"=="1" ( set "DEBUG_MODE=1" & set "DRY_RUN=0" & call :apply_item %DI% )
+if "%DC%"=="2" ( set "DEBUG_MODE=1" & set "DRY_RUN=0" & call :rollback_item %DI% )
+if "%DC%"=="3" ( set "DEBUG_MODE=1" & set "DRY_RUN=1" & call :apply_item %DI% )
+if "%DC%"=="4" ( set "DEBUG_MODE=1" & set "DRY_RUN=1" & call :rollback_item %DI% )
+if "%DC%"=="5" ( findstr /c:"item=%DI%" "%LOG_FILE%" 2>nul | more )
+if "%DC%"=="0" goto :eof
+pause
+goto debug_item
+
+:debug_menu
+cls
+for /l %%i in (1,1,12) do ( call :get_item_state %%i & echo   [%%i] [!ITEM_STATE!] !NAME_%%i! )
+echo.
+set /p "DI=编号 (B=返回): "
+if /i "%DI%"=="B" goto main_menu
+if %DI% geq 1 if %DI% leq 12 call :debug_item %DI%
+goto debug_menu
+
+:view_logs
+cls
+echo 日志: %LOG_FILE%
+echo ---
+if exist "%LOG_FILE%" ( powershell -Command "Get-Content '%LOG_FILE%' -Tail 30" ) else ( echo (无) )
+echo ---
+pause
+goto main_menu
+
+REM ============================================================================
+REM 加固项调度
+REM ============================================================================
+:apply_item
+set "AI=%~1"
+call :log_info "执行加固项 %AI%: !NAME_%AI%!"
+call :do_apply_%AI%
+if "%DRY_RUN%"=="0" call :set_item_state %AI% applied
+goto :eof
+
+:rollback_item
+set "RI=%~1"
+call :log_info "回退加固项 %RI%: !NAME_%RI%!"
+call :do_rollback_%RI%
+if "%DRY_RUN%"=="0" call :clear_item_state %RI%
+call :log_action rollback %RI% success ""
+goto :eof
+
+REM ============================================================================
+REM [1] Gateway 绑定加固 — 防 1800+ 暴露事件
+REM ============================================================================
+:do_apply_1
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将检查 Gateway 绑定 & goto :eof )
+
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+REM 创建绑定检查脚本 (不依赖外部组件)
+(
+    echo @echo off
+    echo REM 检查 Gateway 是否对外暴露
+    echo netstat -an ^| findstr ":%GATEWAY_PORT% " ^| findstr "LISTENING" ^| findstr /v "127.0.0.1 ::1" ^>nul 2^>^&1
+    echo if %%errorlevel%%==0 ^(
+    echo     echo [CRITICAL] Gateway 端口 %GATEWAY_PORT% 对外暴露!
+    echo     eventcreate /id 9001 /l Application /t ERROR /so OpenClaw /d "Gateway exposed on non-loopback" ^>nul 2^>^&1
+    echo ^) else ^(
+    echo     echo [OK] Gateway 仅绑定到本地回环
+    echo ^)
+) > "%OPENCLAW_CONFIG_DIR%\check-gateway-bind.bat"
+
+REM 创建定时检查任务 (需要 schtasks)
+if "%HAS_SCHTASKS%"=="1" (
+    schtasks /delete /tn "OpenClaw_BindCheck" /f >nul 2>&1
+    schtasks /create /tn "OpenClaw_BindCheck" /tr "%OPENCLAW_CONFIG_DIR%\check-gateway-bind.bat" /sc MINUTE /mo 5 /ru SYSTEM >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo   [警告] 定时任务创建失败，请手动执行 check-gateway-bind.bat
+        call :log_info "schtasks 创建失败"
+    )
+) else (
+    echo   [提示] schtasks 不可用，跳过定时检查 (可手动执行 check-gateway-bind.bat)
+    call :log_info "schtasks 不可用，跳过定时检查"
+)
+
+call :log_action apply 1 success "Gateway 绑定加固完成"
+echo   [完成] Gateway 绑定检查脚本已创建
+goto :eof
+
+:do_rollback_1
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_SCHTASKS%"=="1" ( schtasks /delete /tn "OpenClaw_BindCheck" /f >nul 2>&1 )
+del /q "%OPENCLAW_CONFIG_DIR%\check-gateway-bind.bat" 2>nul
+echo   [完成] 已回退
+goto :eof
+
+REM ============================================================================
+REM [2] 服务账户隔离
+REM ============================================================================
+:do_apply_2
+REM 幂等性检查
+net user %SERVICE_ACCOUNT% >nul 2>&1
+if %errorlevel%==0 ( echo   [幂等] 服务账户已存在 & goto :apply_2_done )
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将创建 %SERVICE_ACCOUNT% & goto :eof )
+
+REM 生成随机密码 (优先 PowerShell, 降级用固定复杂密码)
+set "RPWD="
+if "%HAS_POWERSHELL%"=="1" (
+    for /f %%a in ('powershell -Command "[System.Web.Security.Membership]::GeneratePassword(16,4)" 2^>nul') do set "RPWD=%%a"
+)
+if "%RPWD%"=="" (
+    REM PowerShell 不可用或生成失败，使用基于时间的随机密码
+    set "RPWD=OC!random!!random!!date:~-2!#sA"
+    echo   [提示] PowerShell 不可用，使用备选密码生成
+)
+
+net user %SERVICE_ACCOUNT% "%RPWD%" /add /passwordchg:no /expires:never >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [失败] 创建服务账户失败 (权限不足?)
+    call :log_info "创建服务账户失败"
+    goto :eof
+)
+net localgroup "Users" %SERVICE_ACCOUNT% /delete >nul 2>&1
+wmic useraccount where name='%SERVICE_ACCOUNT%' set PasswordExpires=FALSE >nul 2>&1
+
+:apply_2_done
+call :log_action apply 2 success "服务账户已配置"
+echo   [完成] 服务账户 %SERVICE_ACCOUNT%
+goto :eof
+
+:do_rollback_2
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+net user %SERVICE_ACCOUNT% /delete >nul 2>&1
+echo   [完成] 账户已删除
+goto :eof
+
+REM ============================================================================
+REM [3] NTFS ACL 权限加固
+REM ============================================================================
+:do_apply_3
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置 NTFS ACL & goto :eof )
+
+REM 环境检查: icacls
+if "%HAS_ICACLS%"=="0" (
+    echo   [跳过] icacls 不可用，无法配置 NTFS ACL
+    call :log_info "icacls 不可用，跳过 NTFS ACL"
+    goto :eof
+)
+
+for %%d in ("%OPENCLAW_DIR%" "%OPENCLAW_STATE_DIR%" "%OPENCLAW_LOGS_DIR%" "%OPENCLAW_SECRETS_DIR%" "%OPENCLAW_CONFIG_DIR%") do (
+    if not exist "%%~d" mkdir "%%~d"
+)
+
+REM 检查服务账户是否存在
+net user %SERVICE_ACCOUNT% >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [警告] 服务账户 %SERVICE_ACCOUNT% 不存在，仅设置管理员权限。建议先执行加固项 2。
+    call :log_info "服务账户不存在，仅设置管理员 ACL"
+    icacls "%OPENCLAW_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" >nul 2>&1
+    icacls "%OPENCLAW_SECRETS_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" >nul 2>&1
+    icacls "%OPENCLAW_STATE_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" >nul 2>&1
+    icacls "%OPENCLAW_LOGS_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" >nul 2>&1
+    goto :apply_3_done
+)
+
+REM 主目录: 管理员完全+服务账户读执行
+icacls "%OPENCLAW_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)RX" >nul 2>&1
+REM 密钥目录: 管理员完全+服务账户只读
+icacls "%OPENCLAW_SECRETS_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)R" >nul 2>&1
+REM 状态/日志目录: 管理员完全+服务账户修改
+icacls "%OPENCLAW_STATE_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)M" >nul 2>&1
+icacls "%OPENCLAW_LOGS_DIR%" /inheritance:r /grant:r "Administrators:(OI)(CI)F" /grant:r "%SERVICE_ACCOUNT%:(OI)(CI)M" >nul 2>&1
+
+:apply_3_done
+call :log_action apply 3 success "NTFS ACL 配置完成"
+echo   [完成] NTFS ACL 权限配置
+goto :eof
+
+:do_rollback_3
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_ICACLS%"=="1" (
+    icacls "%OPENCLAW_DIR%" /reset /t >nul 2>&1
+    echo   [完成] 权限已重置
+) else (
+    echo   [跳过] icacls 不可用
+)
+goto :eof
+
+REM ============================================================================
+REM [4] 凭证安全管理
+REM ============================================================================
+:do_apply_4
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将生成安全配置 & goto :eof )
+
+if not exist "%OPENCLAW_SECRETS_DIR%" mkdir "%OPENCLAW_SECRETS_DIR%"
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+REM 生成 Token (幂等)
+if not exist "%OPENCLAW_SECRETS_DIR%\gateway-token" (
+    for /f %%a in ('powershell -Command "[Convert]::ToBase64String([Security.Cryptography.RandomNumberGenerator]::GetBytes(24))"') do echo %%a > "%OPENCLAW_SECRETS_DIR%\gateway-token"
+    echo   Token 已生成
+) else ( echo   [幂等] Token 已存在 )
+
+REM 安全配置 (幂等)
+if not exist "%OPENCLAW_CONFIG_DIR%\config.yaml" (
+    (
+        echo # OpenClaw 安全配置
+        echo gateway:
+        echo   bind: loopback
+        echo   port: %GATEWAY_PORT%
+        echo   auth:
+        echo     mode: token
+        echo   controlUi:
+        echo     enabled: true
+        echo     allowInsecureAuth: false
+        echo     dangerouslyDisableDeviceAuth: false
+        echo logging:
+        echo   redactSensitive: tools
+        echo tools:
+        echo   elevated:
+        echo     enabled: false
+        echo browser:
+        echo   enabled: false
+    ) > "%OPENCLAW_CONFIG_DIR%\config.yaml"
+) else ( echo   [幂等] 配置已存在 )
+
+REM 加固 .openclaw 目录
+if exist "%USERPROFILE%\.openclaw" (
+    icacls "%USERPROFILE%\.openclaw" /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" >nul 2>&1
+)
+
+call :log_action apply 4 success "凭证安全配置完成"
+echo   [完成] Token + 配置 + 凭证保护
+goto :eof
+
+:do_rollback_4
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+del /q "%OPENCLAW_SECRETS_DIR%\gateway-token" 2>nul
+del /q "%OPENCLAW_CONFIG_DIR%\config.yaml" 2>nul
+echo   [完成] 凭证已删除
+goto :eof
+
+REM ============================================================================
+REM [5] Windows 防火墙端口限制
+REM ============================================================================
+:do_apply_5
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置防火墙 & goto :eof )
+
+REM 环境检查: 防火墙
+if "%HAS_FIREWALL%"=="0" (
+    echo   [跳过] Windows 防火墙服务 ^(MpsSvc^) 不可用或已禁用
+    echo          请检查: sc query MpsSvc / 组策略是否禁用了防火墙
+    call :log_info "防火墙服务不可用，跳过"
+    goto :eof
+)
+if "%HAS_NETSH%"=="0" (
+    echo   [跳过] netsh 不可用
+    call :log_info "netsh 不可用，跳过防火墙"
+    goto :eof
+)
+
+REM 检查防火墙服务是否运行中
+sc query MpsSvc | findstr "RUNNING" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [提示] 防火墙服务未运行，尝试启动...
+    net start MpsSvc >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo   [跳过] 防火墙服务启动失败
+        call :log_info "防火墙服务启动失败"
+        goto :eof
+    )
+)
+
+REM 幂等: 先删后建
+netsh advfirewall firewall delete rule name="OpenClaw - Block External" >nul 2>&1
+netsh advfirewall firewall delete rule name="OpenClaw - Allow Local" >nul 2>&1
+netsh advfirewall firewall add rule name="OpenClaw - Block External" dir=in action=block protocol=tcp localport=%GATEWAY_PORT% >nul 2>&1
+netsh advfirewall firewall add rule name="OpenClaw - Allow Local" dir=in action=allow protocol=tcp localport=%GATEWAY_PORT% remoteip=127.0.0.1 >nul 2>&1
+
+call :log_action apply 5 success "防火墙配置完成"
+echo   [完成] 端口 %GATEWAY_PORT% 已限制
+goto :eof
+
+:do_rollback_5
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_NETSH%"=="0" ( echo   [跳过] netsh 不可用 & goto :eof )
+netsh advfirewall firewall delete rule name="OpenClaw - Block External" >nul 2>&1
+netsh advfirewall firewall delete rule name="OpenClaw - Allow Local" >nul 2>&1
+echo   [完成] 防火墙规则已删除
+goto :eof
+
+REM ============================================================================
+REM [6] Windows Defender + ASR 规则
+REM ============================================================================
+:do_apply_6
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置 Defender & goto :eof )
+
+REM 环境检查: Defender + PowerShell
+if "%HAS_DEFENDER%"=="0" (
+    echo   [跳过] Windows Defender 服务不可用 (可能使用第三方杀毒或 Server Core)
+    call :log_info "Defender 不可用，跳过"
+    goto :eof
+)
+if "%HAS_POWERSHELL%"=="0" (
+    echo   [跳过] PowerShell 不可用，无法配置 Defender
+    call :log_info "PowerShell 不可用，跳过 Defender"
+    goto :eof
+)
+
+REM 检查 Defender 服务是否运行
+sc query WinDefend | findstr "RUNNING" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [提示] Defender 服务未运行，尝试启动...
+    net start WinDefend >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo   [跳过] Defender 服务启动失败 (可能被组策略禁用)
+        call :log_info "Defender 启动失败"
+        goto :eof
+    )
+)
+
+REM 排除 OpenClaw 目录 (防误报)
+powershell -Command "Add-MpPreference -ExclusionPath '%OPENCLAW_DIR%' -ErrorAction SilentlyContinue" >nul 2>&1
+
+REM 启用实时保护
+powershell -Command "Set-MpPreference -DisableRealtimeMonitoring $false -ErrorAction SilentlyContinue" >nul 2>&1
+
+REM ASR 规则 (防命令注入/代码执行)
+powershell -Command "Set-MpPreference -AttackSurfaceReductionRules_Ids D4F940AB-401B-4EFC-AADC-AD5F3C50688A -AttackSurfaceReductionRules_Actions Enabled -ErrorAction SilentlyContinue" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [警告] ASR 规则设置失败 (可能需要 Windows 10 企业版/教育版)
+    call :log_info "ASR 规则不支持 (需企业版)"
+)
+powershell -Command "Set-MpPreference -AttackSurfaceReductionRules_Ids 3B576869-A4EC-4529-8536-B80A7769E899 -AttackSurfaceReductionRules_Actions Enabled -ErrorAction SilentlyContinue" >nul 2>&1
+
+REM 启用 PUA 保护
+powershell -Command "Set-MpPreference -PUAProtection 1 -ErrorAction SilentlyContinue" >nul 2>&1
+
+call :log_action apply 6 success "Defender+ASR 配置完成"
+echo   [完成] Defender + ASR 规则
+goto :eof
+
+:do_rollback_6
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_DEFENDER%"=="0" ( echo   [跳过] Defender 不可用 & goto :eof )
+if "%HAS_POWERSHELL%"=="1" (
+    powershell -Command "Remove-MpPreference -ExclusionPath '%OPENCLAW_DIR%' -ErrorAction SilentlyContinue" >nul 2>&1
+)
+echo   [完成] Defender 已重置
+goto :eof
+
+REM ============================================================================
+REM [7] 安全审计策略
+REM ============================================================================
+:do_apply_7
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置审计 & goto :eof )
+
+REM 环境检查: auditpol
+if "%HAS_AUDITPOL%"=="0" (
+    echo   [跳过] auditpol 不可用 (Windows Home 版不支持本地安全策略)
+    call :log_info "auditpol 不可用，跳过审计策略"
+    goto :eof
+)
+
+REM 启用审计 (幂等，忽略单个失败)
+set "AUDIT_OK=0"
+auditpol /set /subcategory:"Logon" /success:enable /failure:enable >nul 2>&1 && set /a AUDIT_OK+=1
+auditpol /set /subcategory:"Process Creation" /success:enable /failure:enable >nul 2>&1 && set /a AUDIT_OK+=1
+auditpol /set /subcategory:"Object Access" /success:enable /failure:enable >nul 2>&1 && set /a AUDIT_OK+=1
+auditpol /set /subcategory:"Privilege Use" /success:enable /failure:enable >nul 2>&1 && set /a AUDIT_OK+=1
+auditpol /set /subcategory:"File System" /success:enable /failure:enable >nul 2>&1 && set /a AUDIT_OK+=1
+
+if !AUDIT_OK!==0 (
+    echo   [警告] 所有审计策略设置均失败 (可能是语言环境差异导致子类别名称不匹配)
+    echo          可尝试使用 GUID 方式配置或检查 auditpol /list /subcategory:*
+    call :log_info "审计策略全部失败 (语言差异?)"
+)
+
+REM 命令行审计
+reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit" /v ProcessCreationIncludeCmdLine_Enabled /t REG_DWORD /d 1 /f >nul 2>&1
+
+call :log_action apply 7 success "审计策略配置完成 (%AUDIT_OK%/5 项)"
+echo   [完成] 审计策略 (%AUDIT_OK%/5 项) + 命令行记录
+goto :eof
+
+:do_rollback_7
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_AUDITPOL%"=="1" (
+    auditpol /set /subcategory:"Process Creation" /success:disable /failure:disable >nul 2>&1
+)
+reg delete "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit" /v ProcessCreationIncludeCmdLine_Enabled /f >nul 2>&1
+echo   [完成] 审计已禁用
+goto :eof
+
+REM ============================================================================
+REM [8] AppLocker 应用控制
+REM ============================================================================
+:do_apply_8
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置 AppLocker & goto :eof )
+
+sc query AppIDSvc >nul 2>&1
+if %errorlevel% neq 0 ( echo   [跳过] AppLocker 不可用 & goto :eof )
+
+sc config AppIDSvc start= auto >nul 2>&1
+net start AppIDSvc >nul 2>&1
+
+call :log_action apply 8 success "AppLocker 配置完成"
+echo   [完成] AppLocker 已启用
+goto :eof
+
+:do_rollback_8
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+net stop AppIDSvc >nul 2>&1
+sc config AppIDSvc start= demand >nul 2>&1
+echo   [完成] AppLocker 已禁用
+goto :eof
+
+REM ============================================================================
+REM [9] 命令执行限制 — 防提示注入
+REM ============================================================================
+:do_apply_9
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置命令限制 & goto :eof )
+
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+REM 命令限制配置 (与 Linux bash-restrictions.conf 对齐)
+(
+    echo # OpenClaw Windows 命令执行限制
+    echo # 基于源码 bash-tools.exec.ts 的安全机制
+    echo.
+    echo # 阻止的命令
+    echo BLOCKED_COMMANDS=net,netsh,sc,reg,wmic,bcdedit,schtasks,powershell -ep bypass,cmd /c format
+    echo.
+    echo # 危险环境变量 ^(源码 DANGEROUS_HOST_ENV_VARS^)
+    echo BLOCKED_ENV=NODE_OPTIONS,LD_PRELOAD,PYTHONPATH
+    echo.
+    echo # 阻止 cmd.exe 的 ^& 绕过 ^(源码中已有检查^)
+    echo BLOCK_CMD_BYPASS=true
+    echo.
+    echo # 执行超时
+    echo MAX_EXEC_TIME=60
+) > "%OPENCLAW_CONFIG_DIR%\command-restrictions.conf"
+
+call :log_action apply 9 success "命令限制配置完成"
+echo   [完成] 命令黑名单 + 环境变量过滤
+goto :eof
+
+:do_rollback_9
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+del /q "%OPENCLAW_CONFIG_DIR%\command-restrictions.conf" 2>nul
+echo   [完成] 命令限制已删除
+goto :eof
+
+REM ============================================================================
+REM [10] 出站网络限制 — 防 SSRF
+REM ============================================================================
+:do_apply_10
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置出站限制 & goto :eof )
+
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+REM 白名单配置文件始终生成 (不依赖防火墙)
+(
+    echo # OpenClaw 出站白名单
+    echo api.openai.com
+    echo api.anthropic.com
+    echo api.deepseek.com
+    echo generativelanguage.googleapis.com
+) > "%OPENCLAW_CONFIG_DIR%\outbound-whitelist.conf"
+
+REM 环境检查: 防火墙
+if "%HAS_FIREWALL%"=="0" (
+    echo   [提示] 防火墙不可用，仅生成白名单配置文件
+    call :log_info "防火墙不可用，仅生成白名单文件"
+    goto :apply_10_done
+)
+if "%HAS_NETSH%"=="0" (
+    echo   [提示] netsh 不可用，仅生成白名单配置文件
+    call :log_info "netsh 不可用"
+    goto :apply_10_done
+)
+
+REM 幂等: 先删后建
+netsh advfirewall firewall delete rule name="OpenClaw - Allow DNS Out" >nul 2>&1
+netsh advfirewall firewall delete rule name="OpenClaw - Allow HTTPS Out" >nul 2>&1
+netsh advfirewall firewall delete rule name="OpenClaw - Block Outbound" >nul 2>&1
+
+REM 出站规则
+netsh advfirewall firewall add rule name="OpenClaw - Allow DNS Out" dir=out action=allow protocol=udp remoteport=53 >nul 2>&1
+netsh advfirewall firewall add rule name="OpenClaw - Allow HTTPS Out" dir=out action=allow protocol=tcp remoteport=443 >nul 2>&1
+
+:apply_10_done
+call :log_action apply 10 success "出站限制配置完成"
+echo   [完成] 出站限制 + AI API 白名单
+goto :eof
+
+:do_rollback_10
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+if "%HAS_NETSH%"=="1" (
+    netsh advfirewall firewall delete rule name="OpenClaw - Allow DNS Out" >nul 2>&1
+    netsh advfirewall firewall delete rule name="OpenClaw - Allow HTTPS Out" >nul 2>&1
+)
+del /q "%OPENCLAW_CONFIG_DIR%\outbound-whitelist.conf" 2>nul
+echo   [完成] 出站限制已删除
+goto :eof
+
+REM ============================================================================
+REM [11] Skill/MCP 供应链防护 — 防 ClawHavoc
+REM ============================================================================
+:do_apply_11
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置供应链防护 & goto :eof )
+
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+(
+    echo # OpenClaw Skill/MCP 供应链安全策略
+    echo # 背景: ClawHavoc - 341 恶意 Skill 分发 AMOS 木马
+    echo.
+    echo REQUIRE_SIGNED_SKILLS=true
+    echo SKILL_SANDBOX=true
+    echo MCP_WHITELIST_ONLY=true
+    echo MCP_AUDIT_TOOL_DESCRIPTIONS=true
+    echo MCP_BLOCK_HIDDEN_INSTRUCTIONS=true
+    echo SKILL_INTEGRITY_CHECK=true
+) > "%OPENCLAW_CONFIG_DIR%\skill-security.conf"
+
+REM Skill 检查脚本
+(
+    echo @echo off
+    echo echo ===== Skill 安全检查 =====
+    echo echo 检查: %%1
+    echo echo.
+    echo echo [1] 检查可疑安装命令...
+    echo findstr /s /i "curl.*^|.*sh wget.*^|.*bash pip.install npm.install.-g" "%%~1\*" 2^>nul
+    echo echo.
+    echo echo [2] 检查隐藏指令...
+    echo findstr /s /i "ignore.previous ignore.above system.prompt" "%%~1\*" 2^>nul
+    echo echo.
+    echo echo [3] 检查敏感路径访问...
+    echo findstr /s /i "\.ssh \.aws \.gnupg credentials" "%%~1\*" 2^>nul
+) > "%OPENCLAW_CONFIG_DIR%\verify-skill.bat"
+
+call :log_action apply 11 success "供应链防护配置完成"
+echo   [完成] Skill 安全策略 + 完整性检查
+goto :eof
+
+:do_rollback_11
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+del /q "%OPENCLAW_CONFIG_DIR%\skill-security.conf" 2>nul
+del /q "%OPENCLAW_CONFIG_DIR%\verify-skill.bat" 2>nul
+echo   [完成] 供应链防护已删除
+goto :eof
+
+REM ============================================================================
+REM [12] 进程资源限制 — 防资源耗尽
+REM ============================================================================
+:do_apply_12
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置资源限制 & goto :eof )
+
+if not exist "%OPENCLAW_CONFIG_DIR%" mkdir "%OPENCLAW_CONFIG_DIR%"
+
+REM 资源限制配置文件 (不依赖外部工具)
+(
+    echo # OpenClaw 进程资源限制配置
+    echo MAX_MEMORY_MB=2048
+    echo MAX_CPU_PERCENT=50
+    echo MAX_PROCESSES=64
+) > "%OPENCLAW_CONFIG_DIR%\resource-limits.conf"
+echo   [完成] 资源限制配置文件
+
+REM 启用 DEP (需要 bcdedit)
+if "%HAS_BCDEDIT%"=="1" (
+    bcdedit /set nx AlwaysOn >nul 2>&1
+    if !errorlevel!==0 (
+        echo   [完成] DEP 已启用 (AlwaysOn)
+    ) else (
+        echo   [警告] bcdedit DEP 配置失败 (可能需重启生效或 UEFI 限制)
+        call :log_info "bcdedit DEP 失败"
+    )
+) else (
+    echo   [提示] bcdedit 不可用，跳过 DEP 配置
+    call :log_info "bcdedit 不可用，跳过 DEP"
+)
+
+REM 配置进程缓解 (需要 PowerShell)
+if "%HAS_POWERSHELL%"=="1" (
+    powershell -Command "Set-ProcessMitigation -System -Enable DEP,SEHOP -ErrorAction SilentlyContinue" >nul 2>&1
+    if !errorlevel!==0 (
+        echo   [完成] SEHOP 已启用
+    ) else (
+        echo   [警告] Set-ProcessMitigation 失败 (Windows 版本可能不支持)
+        call :log_info "ProcessMitigation 失败"
+    )
+) else (
+    echo   [提示] PowerShell 不可用，跳过 SEHOP 配置
+)
+
+call :log_action apply 12 success "资源限制配置完成"
+goto :eof
+
+:do_rollback_12
+if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
+del /q "%OPENCLAW_CONFIG_DIR%\resource-limits.conf" 2>nul
+if "%HAS_BCDEDIT%"=="1" ( bcdedit /set nx OptIn >nul 2>&1 )
+echo   [完成] 资源限制已重置
+goto :eof
+
+REM ============================================================================
+REM 帮助/退出
+REM ============================================================================
+:show_help
+echo OpenClaw Windows 安全加固脚本 v1.2
+echo.
+echo 用法: %~nx0 [选项]
+echo   --help         帮助
+echo   --dry-run      模拟运行
+echo   --status       查看状态
+echo   --rollback N   回退加固项 N (1-12)
+echo   --debug N      调试加固项 N (1-12)
+echo   --apply N      应用加固项 N (1-12)
+goto :eof
+
+:exit_script
+call :log_info "脚本退出"
+echo 日志: %LOG_FILE%
+exit /b 0

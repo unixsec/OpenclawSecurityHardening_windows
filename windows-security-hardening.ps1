@@ -43,7 +43,8 @@
     生成安全审计报告
 
 .NOTES
-    版本: 1.0
+    版本: 1.1
+    许可证: Apache License 2.0
     作者: Alex
     邮箱: unix_sec@163.com
     需要管理员权限运行

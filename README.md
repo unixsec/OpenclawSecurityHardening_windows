@@ -1,9 +1,14 @@
 # OpenClaw Windows 10 Security Hardening Scripts
+
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-purple.svg)](https://docs.microsoft.com/powershell/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+
 ## Overview
 
 This project provides a complete set of Windows 10/11 security hardening scripts for securely deploying OpenClaw AI Gateway in enterprise environments. The scripts follow CIS Windows Security Benchmark and Microsoft security best practices for automated security configuration.
 
-**v1.0 New Feature**: Brand new **interactive multi-select interface** allowing users to freely choose which hardening items to execute!
+**Features**: **Interactive multi-select interface** allowing users to freely choose which hardening items to execute!
 
 ## Author Information
 
@@ -11,9 +16,9 @@ This project provides a complete set of Windows 10/11 security hardening scripts
 |------|-------------|
 | **Author** | Alex |
 | **Email** | unix_sec@163.com |
-| **Version** | 1.0.0 |
+| **Version** | 1.2.0 |
 | **Created** | 2026-02-05 |
-| **Updated** | 2026-02-05 |
+| **Updated** | 2026-02-09 |
 
 ## Features
 
@@ -57,15 +62,6 @@ This project provides a complete set of Windows 10/11 security hardening scripts
 - Windows Defender (not third-party antivirus)
 - Domain environment (for Group Policy integration)
 
-## File Structure
-
-```
-scripts/
-├── README.md                        # This document (English)
-├── README_CN.md                     # Chinese documentation
-├── windows-security-hardening.bat   # BAT script (interactive menu)
-└── windows-security-hardening.ps1   # PowerShell script (command-line)
-```
 
 ## Quick Start
 
@@ -360,9 +356,42 @@ All operation logs are saved to:
 5. **Backup Configuration** - Backup existing configuration before hardening
 6. **Test Environment** - Validate scripts in test environment first
 
+## References
+
+- [CIS Microsoft Windows 10 Benchmark](https://www.cisecurity.org/benchmark/microsoft_windows_desktop)
+- [Microsoft Security Baselines](https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-security-configuration-framework/windows-security-baselines)
+- [Windows Defender ASR Rules](https://docs.microsoft.com/en-us/microsoft-365/security/defender-endpoint/attack-surface-reduction-rules-reference)
+- [NSSM - Non-Sucking Service Manager](https://nssm.cc/)
+
+## Changelog
+
+### v1.2.0 (2026-02-09)
+- Added: Environment adaptability detection framework (`detect_env`), checks 9 system components at startup
+- Added: Environment pre-check report (`show_env_summary`) shown in main menu
+- Added: Pre-requisite checks for every apply/rollback function, smart skip when components missing
+- Improved: `do_apply_1` skips scheduled task when schtasks unavailable, still creates check script
+- Improved: `do_apply_2` PowerShell password generation fallback
+- Improved: `do_apply_3` icacls detection + service account existence check
+- Improved: `do_apply_5` firewall service runtime check (MpsSvc), skip if start fails
+- Improved: `do_apply_6` Defender full chain check (service + running + ASR version compatibility)
+- Improved: `do_apply_7` auditpol availability check + locale adaptation hints
+- Improved: `do_apply_10` whitelist config separated from firewall rules, independent checks
+- Improved: `do_apply_12` bcdedit/PowerShell checked independently, no mutual dependency
+- Improved: All rollback functions check tool availability before execution
+
+### v1.0.0 (2026-02-05)
+- Initial release
+- Interactive multi-select interface for freely choosing hardening items
+- Support entering multiple digits to toggle multiple options simultaneously
+- Select all/deselect all shortcuts (A/N)
+- Support full security hardening workflow
+- Support both BAT and PowerShell scripts
+- Support security audit report generation
+- Support emergency rollback
+
 ## License
 
-This project is licensed under the Apache 2.0 License. See [LICENSE](../LICENSE) file for details.
+This project is licensed under the Apache License 2.0. See [LICENSE](../LICENSE) file for details.
 
 ## Contributing
 
@@ -373,4 +402,4 @@ Issues and Pull Requests are welcome!
 **Author**: Alex  
 **Email**: unix_sec@163.com  
 **Project**: OpenClaw Windows Security Hardening Scripts  
-**Version**: 1.0.0
+**Version**: 1.2.0
