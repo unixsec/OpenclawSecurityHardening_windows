@@ -16,9 +16,20 @@ This project provides a complete set of Windows 10/11 security hardening scripts
 |------|-------------|
 | **Author** | Alex |
 | **Email** | unix_sec@163.com |
-| **Version** | 1.2.0 |
+| **Version** | 1.3.0 |
 | **Created** | 2026-02-05 |
-| **Updated** | 2026-02-09 |
+| **Updated** | 2026-02-10 |
+
+## v1.3 New Features
+
+| Feature | Description |
+|---------|-------------|
+| **One-click Rollback** | Rollback all/pre-deployment/post-deployment hardening items in reverse order |
+| **Phase-based Rollback** | New menu options `[R] Rollback pre-deployment` and `[T] Rollback post-deployment` |
+| **Execution Report** | Detailed report after every batch apply/rollback (success/skipped/failed statistics) |
+| **CLI Batch Rollback** | New `--rollback-all`, `--rollback-pre`, `--rollback-post` CLI arguments |
+| **CLI Report Output** | Report summary also output for `--apply`/`--pre`/`--post`/`--rollback` CLI usage |
+| **Result Tracking** | `apply_item`/`rollback_item` automatically track results (success/skipped/failed) |
 
 ## Features
 
@@ -356,14 +367,19 @@ All operation logs are saved to:
 5. **Backup Configuration** - Backup existing configuration before hardening
 6. **Test Environment** - Validate scripts in test environment first
 
-## References
-
-- [CIS Microsoft Windows 10 Benchmark](https://www.cisecurity.org/benchmark/microsoft_windows_desktop)
-- [Microsoft Security Baselines](https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-security-configuration-framework/windows-security-baselines)
-- [Windows Defender ASR Rules](https://docs.microsoft.com/en-us/microsoft-365/security/defender-endpoint/attack-surface-reduction-rules-reference)
-- [NSSM - Non-Sucking Service Manager](https://nssm.cc/)
-
 ## Changelog
+
+### v1.3.0 (2026-02-10)
+- Added: One-click rollback for all/pre-deployment/post-deployment hardening items
+- Added: Execution report summary after every batch operation (success/skipped/failed details)
+- Added: `:rollback_phase` for phase-based rollback in reverse order
+- Added: `:reset_report`/`:print_report`/`:report_ok`/`:report_skip`/`:report_fail` report functions
+- Added: `:cli_rollback` for CLI batch rollback
+- Added: CLI arguments `--rollback-all`, `--rollback-pre`, `--rollback-post`
+- Improved: `:apply_item`/`:rollback_item` track results via `ITEM_SKIPPED` flag
+- Improved: Main menu with `[R]` rollback pre-deployment, `[T]` rollback post-deployment options
+- Improved: Interactive select, one-click, and CLI execution all output report summary
+- Improved: All `do_apply_*`/`do_rollback_*` set `ITEM_SKIPPED=1` flag when skipping
 
 ### v1.2.0 (2026-02-09)
 - Added: Environment adaptability detection framework (`detect_env`), checks 9 system components at startup
@@ -402,4 +418,4 @@ Issues and Pull Requests are welcome!
 **Author**: Alex  
 **Email**: unix_sec@163.com  
 **Project**: OpenClaw Windows Security Hardening Scripts  
-**Version**: 1.2.0
+**Version**: 1.3.0

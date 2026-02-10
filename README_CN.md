@@ -14,11 +14,22 @@
 |------|------|
 | **作者** | Alex |
 | **邮箱** | unix_sec@163.com |
-| **版本** | 1.2.0 |
+| **版本** | 1.3.0 |
 | **创建日期** | 2026-02-05 |
-| **最后更新** | 2026-02-09 |
+| **最后更新** | 2026-02-10 |
 
-## v1.2 新增功能 (环境适配性)
+## v1.3 新增功能
+
+| 功能 | 说明 |
+|------|------|
+| **一键回退加固** | 支持一键回退全部/部署前/部署后加固项，按倒序安全回退 |
+| **分阶段回退** | 主菜单新增 `[R] 回退部署前加固` 和 `[T] 回退部署后加固` 选项 |
+| **执行报告总结** | 每次批量加固/回退操作完成后自动输出详细报告（成功/跳过/失败统计） |
+| **命令行批量回退** | 新增 `--rollback-all`、`--rollback-pre`、`--rollback-post` 命令行参数 |
+| **命令行报告输出** | 命令行执行 `--apply`/`--pre`/`--post`/`--rollback` 时也输出报告总结 |
+| **结果追踪** | `apply_item`/`rollback_item` 自动追踪执行结果，区分成功/跳过/失败 |
+
+## v1.2 功能 (环境适配性)
 
 | 功能 | 说明 |
 |------|------|
@@ -104,6 +115,9 @@ windows-security-hardening.bat --status
 REM 回退指定加固项
 windows-security-hardening.bat --rollback 5
 
+REM 一键回退全部加固项
+windows-security-hardening.bat --rollback-all
+
 REM 调试指定加固项
 windows-security-hardening.bat --debug 3
 
@@ -118,9 +132,14 @@ windows-security-hardening.bat --apply 1
 | `--help` | 显示帮助信息 | `script.bat --help` |
 | `--dry-run` | 模拟运行 | `script.bat --dry-run` |
 | `--status` | 查看加固状态 | `script.bat --status` |
-| `--rollback N` | 回退加固项 N | `script.bat --rollback 5` |
-| `--debug N` | 调试加固项 N | `script.bat --debug 3` |
 | `--apply N` | 应用加固项 N | `script.bat --apply 1` |
+| `--pre` | 仅执行部署前加固 | `script.bat --pre` |
+| `--post` | 仅执行部署后加固 | `script.bat --post` |
+| `--rollback N` | 回退加固项 N | `script.bat --rollback 5` |
+| `--rollback-all` | 一键回退全部加固项 | `script.bat --rollback-all` |
+| `--rollback-pre` | 一键回退部署前加固项 | `script.bat --rollback-pre` |
+| `--rollback-post` | 一键回退部署后加固项 | `script.bat --rollback-post` |
+| `--debug N` | 调试加固项 N | `script.bat --debug 3` |
 
 ### 交互式菜单选项
 
@@ -128,11 +147,15 @@ windows-security-hardening.bat --apply 1
 |------|------|
 | 1 | 交互式选择加固项 |
 | 2 | 一键完整加固 |
-| 3 | 查看加固状态 |
-| 4 | 回退指定加固项 |
-| 5 | 调试指定加固项 |
-| 6 | 查看日志 |
-| 7 | 全部回退 |
+| 3 | 部署前加固 |
+| 4 | 部署后加固 |
+| 5 | 回退指定项 |
+| 6 | 一键全部回退 |
+| 7 | 调试模式 |
+| 8 | 查看日志 |
+| 9 | 查看状态 |
+| R | 回退部署前加固 |
+| T | 回退部署后加固 |
 
 ## 幂等性说明
 
@@ -439,14 +462,19 @@ Get-Service -Name MpsSvc | Start-Service
 5. **备份配置** - 加固前备份现有配置
 6. **测试环境** - 先在测试环境验证脚本
 
-## 参考资源
-
-- [CIS Microsoft Windows 10 Benchmark](https://www.cisecurity.org/benchmark/microsoft_windows_desktop)
-- [Microsoft Security Baselines](https://docs.microsoft.com/en-us/windows/security/threat-protection/windows-security-configuration-framework/windows-security-baselines)
-- [Windows Defender ASR Rules](https://docs.microsoft.com/en-us/microsoft-365/security/defender-endpoint/attack-surface-reduction-rules-reference)
-- [NSSM - Non-Sucking Service Manager](https://nssm.cc/)
-
 ## 更新日志
+
+### v1.3.0 (2026-02-10)
+- 新增: 一键回退加固功能，支持全部/部署前/部署后分阶段回退
+- 新增: 执行报告总结，每次批量操作后输出成功/跳过/失败明细
+- 新增: `:rollback_phase` 分阶段回退标签，按倒序安全回退
+- 新增: `:reset_report`/`:print_report`/`:report_ok`/`:report_skip`/`:report_fail` 报告函数
+- 新增: `:cli_rollback` 命令行批量回退函数
+- 新增: 命令行 `--rollback-all`、`--rollback-pre`、`--rollback-post` 参数
+- 优化: `:apply_item`/`:rollback_item` 通过 `ITEM_SKIPPED` 标志自动追踪执行结果
+- 优化: 主菜单新增 `[R]` 回退部署前、`[T]` 回退部署后选项
+- 优化: 交互式选择、一键加固、命令行执行均输出报告总结
+- 优化: 所有 `do_apply_*`/`do_rollback_*` 跳过时设置 `ITEM_SKIPPED=1` 标志
 
 ### v1.2.0 (2026-02-09)
 - 新增: 环境适配性检测框架 (`detect_env`)，启动时检测 9 项系统组件
@@ -485,4 +513,4 @@ Get-Service -Name MpsSvc | Start-Service
 **作者**: Alex  
 **邮箱**: unix_sec@163.com  
 **项目**: OpenClaw Windows Security Hardening Scripts  
-**版本**: 1.2.0
+**版本**: 1.3.0

@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================================
 REM OpenClaw Windows 安全加固脚本
-REM 版本: 1.2
+REM 版本: 1.3
 REM 作者: Alex
 REM 邮箱: unix_sec@163.com
 REM 许可证: Apache License 2.0
@@ -71,6 +71,20 @@ set "NAME_5=[R1] Windows 防火墙端口限制"
 set "NAME_6=[R2][R6] Windows Defender + ASR"
 set "NAME_7=[R10][R5] 安全审计策略"
 set "NAME_8=[R7][R6] AppLocker 应用控制"
+
+REM 阶段标记: PRE=部署前, POST=部署后
+set "PHASE_1=POST"
+set "PHASE_2=PRE"
+set "PHASE_3=PRE"
+set "PHASE_4=POST"
+set "PHASE_5=PRE"
+set "PHASE_6=PRE"
+set "PHASE_7=PRE"
+set "PHASE_8=PRE"
+set "PHASE_9=POST"
+set "PHASE_10=PRE"
+set "PHASE_11=POST"
+set "PHASE_12=POST"
 set "NAME_9=[R2][R6] 命令执行限制 (防注入)"
 set "NAME_10=[R4] 出站网络限制 (防 SSRF)"
 set "NAME_11=[R9][R3] Skill/MCP 供应链防护"
@@ -85,9 +99,14 @@ if /i "%~1"=="--help" goto show_help
 if /i "%~1"=="-h" goto show_help
 if /i "%~1"=="--dry-run" ( set "DRY_RUN=1" & shift & goto parse_args )
 if /i "%~1"=="--status" ( call :init_logging & call :show_status & goto :eof )
+if /i "%~1"=="--rollback-all" ( call :init_logging & call :detect_env & call :check_admin & call :cli_rollback ALL & goto :eof )
+if /i "%~1"=="--rollback-pre" ( call :init_logging & call :detect_env & call :check_admin & call :cli_rollback PRE & goto :eof )
+if /i "%~1"=="--rollback-post" ( call :init_logging & call :detect_env & call :check_admin & call :cli_rollback POST & goto :eof )
 if /i "%~1"=="--rollback" ( set "ROLLBACK_MODE=1" & set "ROLLBACK_ITEM=%~2" & shift & shift & goto parse_args )
 if /i "%~1"=="--debug" ( set "DEBUG_MODE=1" & set "DEBUG_ITEM=%~2" & shift & shift & goto parse_args )
-if /i "%~1"=="--apply" ( call :init_logging & call :check_admin & call :apply_item %~2 & shift & shift & goto :eof )
+if /i "%~1"=="--apply" ( call :init_logging & call :detect_env & call :check_admin & call :reset_report & call :apply_item %~2 & call :print_report 加固 & shift & shift & goto :eof )
+if /i "%~1"=="--pre" ( call :init_logging & call :detect_env & call :check_admin & call :reset_report & for %%i in (2 3 5 6 7 8 10) do ( echo. & echo [部署前] !NAME_%%i! & call :apply_item %%i ) & call :print_report 加固 & goto :eof )
+if /i "%~1"=="--post" ( call :init_logging & call :detect_env & call :check_admin & call :reset_report & for %%i in (1 4 9 11 12) do ( echo. & echo [部署后] !NAME_%%i! & call :apply_item %%i ) & call :print_report 加固 & goto :eof )
 shift
 goto parse_args
 
@@ -95,7 +114,7 @@ goto parse_args
 call :init_logging
 call :detect_env
 call :check_admin
-if "%ROLLBACK_MODE%"=="1" ( call :rollback_item %ROLLBACK_ITEM% & goto :eof )
+if "%ROLLBACK_MODE%"=="1" ( call :reset_report & call :rollback_item %ROLLBACK_ITEM% & call :print_report 回退 & goto :eof )
 if "%DEBUG_MODE%"=="1" if not "%DEBUG_ITEM%"=="0" ( call :debug_item %DEBUG_ITEM% & goto :eof )
 goto main_menu
 
@@ -207,12 +226,80 @@ if %errorlevel% neq 0 if "%DRY_RUN%"=="0" (
 goto :eof
 
 REM ============================================================================
+REM 报告总结
+REM ============================================================================
+
+:reset_report
+set "RPT_SUCCESS=0"
+set "RPT_SKIPPED=0"
+set "RPT_FAILED=0"
+set "RPT_OK_COUNT=0"
+set "RPT_SKIP_COUNT=0"
+set "RPT_FAIL_COUNT=0"
+for /l %%i in (1,1,50) do (
+    set "RPT_OK_%%i="
+    set "RPT_SKIP_%%i="
+    set "RPT_FAIL_%%i="
+)
+goto :eof
+
+:report_ok
+set /a RPT_SUCCESS+=1
+set /a RPT_OK_COUNT+=1
+set "RPT_OK_!RPT_OK_COUNT!=%~1"
+goto :eof
+
+:report_skip
+set /a RPT_SKIPPED+=1
+set /a RPT_SKIP_COUNT+=1
+set "RPT_SKIP_!RPT_SKIP_COUNT!=%~1"
+goto :eof
+
+:report_fail
+set /a RPT_FAILED+=1
+set /a RPT_FAIL_COUNT+=1
+set "RPT_FAIL_!RPT_FAIL_COUNT!=%~1"
+goto :eof
+
+:print_report
+set "RPT_ACTION=%~1"
+if "%RPT_ACTION%"=="" set "RPT_ACTION=加固"
+set /a RPT_TOTAL=RPT_SUCCESS+RPT_SKIPPED+RPT_FAILED
+echo.
+echo ============================================================
+echo               %RPT_ACTION%执行报告
+echo ============================================================
+echo   执行时间: %date% %time:~0,8%
+if "%DRY_RUN%"=="1" ( echo   运行模式: 模拟运行 ) else ( echo   运行模式: 实际执行 )
+echo   总计: %RPT_TOTAL% 项
+echo   成功: %RPT_SUCCESS%   跳过: %RPT_SKIPPED%   失败: %RPT_FAILED%
+echo ------------------------------------------------------------
+if %RPT_OK_COUNT% gtr 0 (
+    echo   [成功项]
+    for /l %%i in (1,1,%RPT_OK_COUNT%) do echo     + !RPT_OK_%%i!
+)
+if %RPT_SKIP_COUNT% gtr 0 (
+    echo   [跳过项]
+    for /l %%i in (1,1,%RPT_SKIP_COUNT%) do echo     - !RPT_SKIP_%%i!
+)
+if %RPT_FAIL_COUNT% gtr 0 (
+    echo   [失败项]
+    for /l %%i in (1,1,%RPT_FAIL_COUNT%) do echo     x !RPT_FAIL_%%i!
+)
+echo ------------------------------------------------------------
+echo   日志: %LOG_FILE%
+echo   状态: %STATE_FILE%
+echo ============================================================
+call :log_info "报告: %RPT_ACTION% 总计=%RPT_TOTAL% 成功=%RPT_SUCCESS% 跳过=%RPT_SKIPPED% 失败=%RPT_FAILED%"
+goto :eof
+
+REM ============================================================================
 REM 主菜单
 REM ============================================================================
 :main_menu
 cls
 echo ============================================================
-echo     OpenClaw Windows 安全加固脚本 v1.2
+echo     OpenClaw Windows 安全加固脚本 v1.3
 echo     覆盖 10 类安全风险 / 12 项加固措施
 echo ============================================================
 if "%DRY_RUN%"=="1" echo                 [模拟运行模式]
@@ -221,19 +308,29 @@ echo 安全风险: R1 Gateway暴露  R2 提示注入  R3 MCP投毒
 echo           R4 SSRF  R5 凭证泄露  R6 权限提升
 echo           R7 文件越界  R8 资源耗尽  R9 供应链  R10 日志泄露
 echo.
-echo   [1] 交互式选择     [5] 调试模式
-echo   [2] 一键完整加固   [6] 查看日志
-echo   [3] 查看状态       [7] 全部回退
-echo   [4] 回退指定项     [0] 退出
+echo   -- 加固 --                        -- 管理 --
+echo   [1] 交互式选择                   [7] 调试模式
+echo   [2] 一键完整加固                 [8] 查看日志
+echo   [3] 部署前加固 (7项)             [9] 查看状态
+echo   [4] 部署后加固 (5项)
+echo   -- 回退 --                        [0] 退出
+echo   [5] 回退指定项
+echo   [6] 一键全部回退
+echo   [R] 回退部署前加固
+echo   [T] 回退部署后加固
 echo.
-set /p "CHOICE=选项 [0-7]: "
+set /p "CHOICE=选项: "
 if "%CHOICE%"=="1" goto interactive_select
-if "%CHOICE%"=="2" goto one_click_all
-if "%CHOICE%"=="3" ( call :show_status & pause & goto main_menu )
-if "%CHOICE%"=="4" goto rollback_menu
-if "%CHOICE%"=="5" goto debug_menu
-if "%CHOICE%"=="6" goto view_logs
-if "%CHOICE%"=="7" goto rollback_all
+if "%CHOICE%"=="2" ( set "OC_PHASE=ALL" & goto one_click_all )
+if "%CHOICE%"=="3" ( set "OC_PHASE=PRE" & goto one_click_all )
+if "%CHOICE%"=="4" ( set "OC_PHASE=POST" & goto one_click_all )
+if "%CHOICE%"=="5" goto rollback_menu
+if "%CHOICE%"=="6" ( set "OC_RB_PHASE=ALL" & goto rollback_phase )
+if "%CHOICE%"=="7" goto debug_menu
+if "%CHOICE%"=="8" goto view_logs
+if "%CHOICE%"=="9" ( call :show_status & pause & goto main_menu )
+if /i "%CHOICE%"=="R" ( set "OC_RB_PHASE=PRE" & goto rollback_phase )
+if /i "%CHOICE%"=="T" ( set "OC_RB_PHASE=POST" & goto rollback_phase )
 if "%CHOICE%"=="0" goto exit_script
 goto main_menu
 
@@ -245,9 +342,17 @@ for /l %%i in (1,1,12) do set "SEL_%%i=0"
 
 :select_loop
 cls
-echo   输入数字切换，A=全选，N=清空，E=执行，B=返回
+echo   输入数字切换  A=全选  P=选部署前  D=选部署后  N=清空  E=执行  B=返回
 echo.
-for /l %%i in (1,1,12) do (
+echo   -- 部署前 (安装 OpenClaw 之前) --
+for %%i in (2 3 5 6 7 8 10) do (
+    call :get_item_state %%i
+    set "SI="
+    if "!ITEM_STATE!"=="applied" set "SI=[已加固] "
+    if "!SEL_%%i!"=="1" ( echo   [√] [%%i] !SI!!NAME_%%i! ) else ( echo   [ ] [%%i] !SI!!NAME_%%i! )
+)
+echo   -- 部署后 (安装 OpenClaw 之后) --
+for %%i in (1 4 9 11 12) do (
     call :get_item_state %%i
     set "SI="
     if "!ITEM_STATE!"=="applied" set "SI=[已加固] "
@@ -256,6 +361,8 @@ for /l %%i in (1,1,12) do (
 echo.
 set /p "INPUT=输入: "
 if /i "%INPUT%"=="A" ( for /l %%i in (1,1,12) do set "SEL_%%i=1" & goto select_loop )
+if /i "%INPUT%"=="P" ( for %%i in (2 3 5 6 7 8 10) do set "SEL_%%i=1" & goto select_loop )
+if /i "%INPUT%"=="D" ( for %%i in (1 4 9 11 12) do set "SEL_%%i=1" & goto select_loop )
 if /i "%INPUT%"=="N" ( for /l %%i in (1,1,12) do set "SEL_%%i=0" & goto select_loop )
 if /i "%INPUT%"=="B" goto main_menu
 if /i "%INPUT%"=="E" goto execute_selected
@@ -273,21 +380,51 @@ set "COUNT=0"
 for /l %%i in (1,1,12) do if "!SEL_%%i!"=="1" set /a COUNT+=1
 if %COUNT%==0 ( echo 请至少选择一个 & timeout /t 2 >nul & goto select_loop )
 echo.
+call :reset_report
 for /l %%i in (1,1,12) do if "!SEL_%%i!"=="1" ( echo. & echo [%%i] !NAME_%%i! & call :apply_item %%i )
-echo.
-echo 完成 %COUNT% 项！
+call :print_report 加固
 pause
 goto main_menu
 
 :one_click_all
 cls
-echo 一键完整加固 (12项)
-set /p "CONFIRM=确认? [Y/N]: "
-if /i not "%CONFIRM%"=="Y" goto main_menu
-for /l %%i in (1,1,12) do ( echo. & echo [%%i/12] !NAME_%%i! & call :apply_item %%i )
-echo.
-echo 一键完整加固完成！
+call :reset_report
+if "%OC_PHASE%"=="PRE" (
+    echo 部署前加固 (7项: 服务账户/权限/防火墙/Defender/审计/AppLocker/资源限制^)
+    echo.
+    echo   将执行以下加固项:
+    for %%i in (2 3 5 6 7 8 10) do echo     [%%i] [部署前] !NAME_%%i!
+    echo.
+    set /p "CONFIRM=确认? [Y/N]: "
+    if /i not "!CONFIRM!"=="Y" goto main_menu
+    set "N=0"
+    for %%i in (2 3 5 6 7 8 10) do ( set /a N+=1 & echo. & echo [!N!/7] [部署前] !NAME_%%i! & call :apply_item %%i )
+) else if "%OC_PHASE%"=="POST" (
+    echo 部署后加固 (5项: Gateway/凭证/命令限制/供应链/日志^)
+    echo.
+    echo   将执行以下加固项:
+    for %%i in (1 4 9 11 12) do echo     [%%i] [部署后] !NAME_%%i!
+    echo.
+    set /p "CONFIRM=确认? [Y/N]: "
+    if /i not "!CONFIRM!"=="Y" goto main_menu
+    set "N=0"
+    for %%i in (1 4 9 11 12) do ( set /a N+=1 & echo. & echo [!N!/5] [部署后] !NAME_%%i! & call :apply_item %%i )
+) else (
+    echo 完整加固 (12项, 先执行部署前 -^> 再执行部署后^)
+    echo.
+    set /p "CONFIRM=确认? [Y/N]: "
+    if /i not "!CONFIRM!"=="Y" goto main_menu
+    echo.
+    echo === 阶段一: 部署前加固 ===
+    set "N=0"
+    for %%i in (2 3 5 6 7 8 10) do ( set /a N+=1 & echo. & echo [!N!/12] [部署前] !NAME_%%i! & call :apply_item %%i )
+    echo.
+    echo === 阶段二: 部署后加固 ===
+    for %%i in (1 4 9 11 12) do ( set /a N+=1 & echo. & echo [!N!/12] [部署后] !NAME_%%i! & call :apply_item %%i )
+)
+call :print_report 加固
 pause
+set "OC_PHASE="
 goto main_menu
 
 REM ============================================================================
@@ -296,7 +433,13 @@ REM ============================================================================
 :show_status
 echo.
 echo ======== 加固状态 ========
-for /l %%i in (1,1,12) do (
+echo   -- 部署前 (安装 OpenClaw 之前执行) --
+for %%i in (2 3 5 6 7 8 10) do (
+    call :get_item_state %%i
+    if "!ITEM_STATE!"=="applied" ( echo   [√] [%%i] !NAME_%%i! ) else ( echo   [ ] [%%i] !NAME_%%i! )
+)
+echo   -- 部署后 (安装 OpenClaw 之后执行) --
+for %%i in (1 4 9 11 12) do (
     call :get_item_state %%i
     if "!ITEM_STATE!"=="applied" ( echo   [√] [%%i] !NAME_%%i! ) else ( echo   [ ] [%%i] !NAME_%%i! )
 )
@@ -311,20 +454,104 @@ set /p "ITEM=回退编号 (1-12): "
 if /i "%ITEM%"=="B" goto main_menu
 if %ITEM% geq 1 if %ITEM% leq 12 (
     set /p "C=确认? [Y/N]: "
-    if /i "!C!"=="Y" call :rollback_item %ITEM%
+    if /i "!C!"=="Y" (
+        call :reset_report
+        call :rollback_item %ITEM%
+        call :print_report 回退
+    )
 )
 pause
 goto rollback_menu
 
 :rollback_all
-set /p "C=输入 CONFIRM 全部回退: "
-if not "%C%"=="CONFIRM" goto main_menu
-for /l %%i in (12,-1,1) do (
-    call :get_item_state %%i
-    if "!ITEM_STATE!"=="applied" call :rollback_item %%i
+set "OC_RB_PHASE=ALL"
+goto rollback_phase
+
+:rollback_phase
+cls
+call :reset_report
+if "%OC_RB_PHASE%"=="PRE" (
+    echo 一键回退: 部署前加固项
+    echo.
+    set "RB_APPLIED=0"
+    for %%i in (10 8 7 6 5 3 2) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo   [√] [%%i] !NAME_%%i!
+            set /a RB_APPLIED+=1
+        ) else (
+            echo   [-] [%%i] !NAME_%%i! ^(未加固, 跳过^)
+        )
+    )
+    echo.
+    if !RB_APPLIED!==0 ( echo 没有已加固的部署前加固项 & pause & set "OC_RB_PHASE=" & goto main_menu )
+    set /p "C=确认回退部署前加固项? [Y/N]: "
+    if /i not "!C!"=="Y" ( set "OC_RB_PHASE=" & goto main_menu )
+    for %%i in (10 8 7 6 5 3 2) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo. & echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
+) else if "%OC_RB_PHASE%"=="POST" (
+    echo 一键回退: 部署后加固项
+    echo.
+    set "RB_APPLIED=0"
+    for %%i in (12 11 9 4 1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo   [√] [%%i] !NAME_%%i!
+            set /a RB_APPLIED+=1
+        ) else (
+            echo   [-] [%%i] !NAME_%%i! ^(未加固, 跳过^)
+        )
+    )
+    echo.
+    if !RB_APPLIED!==0 ( echo 没有已加固的部署后加固项 & pause & set "OC_RB_PHASE=" & goto main_menu )
+    set /p "C=确认回退部署后加固项? [Y/N]: "
+    if /i not "!C!"=="Y" ( set "OC_RB_PHASE=" & goto main_menu )
+    for %%i in (12 11 9 4 1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo. & echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
+) else (
+    echo 一键回退: 全部加固项
+    echo.
+    set "RB_APPLIED=0"
+    for /l %%i in (12,-1,1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo   [√] [%%i] !NAME_%%i!
+            set /a RB_APPLIED+=1
+        ) else (
+            echo   [-] [%%i] !NAME_%%i! ^(未加固, 跳过^)
+        )
+    )
+    echo.
+    if !RB_APPLIED!==0 ( echo 没有已加固的项目需要回退 & pause & set "OC_RB_PHASE=" & goto main_menu )
+    set /p "C=输入 CONFIRM 确认全部回退: "
+    if not "!C!"=="CONFIRM" ( set "OC_RB_PHASE=" & goto main_menu )
+    for /l %%i in (12,-1,1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo. & echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
 )
-echo 全部回退完成
+call :print_report 回退
 pause
+set "OC_RB_PHASE="
 goto main_menu
 
 :debug_item
@@ -347,7 +574,10 @@ goto debug_item
 
 :debug_menu
 cls
-for /l %%i in (1,1,12) do ( call :get_item_state %%i & echo   [%%i] [!ITEM_STATE!] !NAME_%%i! )
+echo   -- 部署前 --
+for %%i in (2 3 5 6 7 8 10) do ( call :get_item_state %%i & echo   [%%i] [!ITEM_STATE!] !NAME_%%i! )
+echo   -- 部署后 --
+for %%i in (1 4 9 11 12) do ( call :get_item_state %%i & echo   [%%i] [!ITEM_STATE!] !NAME_%%i! )
 echo.
 set /p "DI=编号 (B=返回): "
 if /i "%DI%"=="B" goto main_menu
@@ -368,17 +598,40 @@ REM 加固项调度
 REM ============================================================================
 :apply_item
 set "AI=%~1"
+set "ITEM_SKIPPED="
 call :log_info "执行加固项 %AI%: !NAME_%AI%!"
+set "APPLY_RESULT=OK"
 call :do_apply_%AI%
-if "%DRY_RUN%"=="0" call :set_item_state %AI% applied
+if errorlevel 1 set "APPLY_RESULT=FAIL"
+REM 检查输出中是否包含跳过标记 (通过 ITEM_SKIPPED 变量)
+if "!ITEM_SKIPPED!"=="1" (
+    call :report_skip "[%AI%] !NAME_%AI%!"
+    set "ITEM_SKIPPED="
+) else if "!APPLY_RESULT!"=="FAIL" (
+    call :report_fail "[%AI%] !NAME_%AI%!"
+) else (
+    call :report_ok "[%AI%] !NAME_%AI%!"
+    if "%DRY_RUN%"=="0" call :set_item_state %AI% applied
+)
 goto :eof
 
 :rollback_item
 set "RI=%~1"
+set "ITEM_SKIPPED="
 call :log_info "回退加固项 %RI%: !NAME_%RI%!"
+set "ROLLBACK_RESULT=OK"
 call :do_rollback_%RI%
-if "%DRY_RUN%"=="0" call :clear_item_state %RI%
-call :log_action rollback %RI% success ""
+if errorlevel 1 set "ROLLBACK_RESULT=FAIL"
+if "!ITEM_SKIPPED!"=="1" (
+    call :report_skip "[%RI%] !NAME_%RI%!"
+    set "ITEM_SKIPPED="
+) else if "!ROLLBACK_RESULT!"=="FAIL" (
+    call :report_fail "[%RI%] !NAME_%RI%!"
+) else (
+    call :report_ok "[%RI%] !NAME_%RI%!"
+    if "%DRY_RUN%"=="0" call :clear_item_state %RI%
+    call :log_action rollback %RI% success ""
+)
 goto :eof
 
 REM ============================================================================
@@ -476,6 +729,7 @@ REM 环境检查: icacls
 if "%HAS_ICACLS%"=="0" (
     echo   [跳过] icacls 不可用，无法配置 NTFS ACL
     call :log_info "icacls 不可用，跳过 NTFS ACL"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 
@@ -515,6 +769,7 @@ if "%HAS_ICACLS%"=="1" (
     echo   [完成] 权限已重置
 ) else (
     echo   [跳过] icacls 不可用
+    set "ITEM_SKIPPED=1"
 )
 goto :eof
 
@@ -583,11 +838,13 @@ if "%HAS_FIREWALL%"=="0" (
     echo   [跳过] Windows 防火墙服务 ^(MpsSvc^) 不可用或已禁用
     echo          请检查: sc query MpsSvc / 组策略是否禁用了防火墙
     call :log_info "防火墙服务不可用，跳过"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 if "%HAS_NETSH%"=="0" (
     echo   [跳过] netsh 不可用
     call :log_info "netsh 不可用，跳过防火墙"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 
@@ -599,6 +856,7 @@ if !errorlevel! neq 0 (
     if !errorlevel! neq 0 (
         echo   [跳过] 防火墙服务启动失败
         call :log_info "防火墙服务启动失败"
+        set "ITEM_SKIPPED=1"
         goto :eof
     )
 )
@@ -615,7 +873,7 @@ goto :eof
 
 :do_rollback_5
 if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
-if "%HAS_NETSH%"=="0" ( echo   [跳过] netsh 不可用 & goto :eof )
+if "%HAS_NETSH%"=="0" ( echo   [跳过] netsh 不可用 & set "ITEM_SKIPPED=1" & goto :eof )
 netsh advfirewall firewall delete rule name="OpenClaw - Block External" >nul 2>&1
 netsh advfirewall firewall delete rule name="OpenClaw - Allow Local" >nul 2>&1
 echo   [完成] 防火墙规则已删除
@@ -631,11 +889,13 @@ REM 环境检查: Defender + PowerShell
 if "%HAS_DEFENDER%"=="0" (
     echo   [跳过] Windows Defender 服务不可用 (可能使用第三方杀毒或 Server Core)
     call :log_info "Defender 不可用，跳过"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 if "%HAS_POWERSHELL%"=="0" (
     echo   [跳过] PowerShell 不可用，无法配置 Defender
     call :log_info "PowerShell 不可用，跳过 Defender"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 
@@ -647,6 +907,7 @@ if !errorlevel! neq 0 (
     if !errorlevel! neq 0 (
         echo   [跳过] Defender 服务启动失败 (可能被组策略禁用)
         call :log_info "Defender 启动失败"
+        set "ITEM_SKIPPED=1"
         goto :eof
     )
 )
@@ -674,7 +935,7 @@ goto :eof
 
 :do_rollback_6
 if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] & goto :eof )
-if "%HAS_DEFENDER%"=="0" ( echo   [跳过] Defender 不可用 & goto :eof )
+if "%HAS_DEFENDER%"=="0" ( echo   [跳过] Defender 不可用 & set "ITEM_SKIPPED=1" & goto :eof )
 if "%HAS_POWERSHELL%"=="1" (
     powershell -Command "Remove-MpPreference -ExclusionPath '%OPENCLAW_DIR%' -ErrorAction SilentlyContinue" >nul 2>&1
 )
@@ -691,6 +952,7 @@ REM 环境检查: auditpol
 if "%HAS_AUDITPOL%"=="0" (
     echo   [跳过] auditpol 不可用 (Windows Home 版不支持本地安全策略)
     call :log_info "auditpol 不可用，跳过审计策略"
+    set "ITEM_SKIPPED=1"
     goto :eof
 )
 
@@ -731,7 +993,7 @@ REM ============================================================================
 if "%DRY_RUN%"=="1" ( echo   [DRY-RUN] 将配置 AppLocker & goto :eof )
 
 sc query AppIDSvc >nul 2>&1
-if %errorlevel% neq 0 ( echo   [跳过] AppLocker 不可用 & goto :eof )
+if %errorlevel% neq 0 ( echo   [跳过] AppLocker 不可用 & set "ITEM_SKIPPED=1" & goto :eof )
 
 sc config AppIDSvc start= auto >nul 2>&1
 net start AppIDSvc >nul 2>&1
@@ -938,18 +1200,69 @@ echo   [完成] 资源限制已重置
 goto :eof
 
 REM ============================================================================
+REM 命令行批量回退
+REM ============================================================================
+:cli_rollback
+set "CLI_RB_PHASE=%~1"
+call :reset_report
+if "%CLI_RB_PHASE%"=="PRE" (
+    for %%i in (10 8 7 6 5 3 2) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
+) else if "%CLI_RB_PHASE%"=="POST" (
+    for %%i in (12 11 9 4 1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
+) else (
+    for /l %%i in (12,-1,1) do (
+        call :get_item_state %%i
+        if "!ITEM_STATE!"=="applied" (
+            echo 回退 [%%i] !NAME_%%i!
+            call :rollback_item %%i
+        ) else (
+            call :report_skip "[%%i] !NAME_%%i! (未加固)"
+        )
+    )
+)
+call :print_report 回退
+goto :eof
+
+REM ============================================================================
 REM 帮助/退出
 REM ============================================================================
 :show_help
-echo OpenClaw Windows 安全加固脚本 v1.2
+echo OpenClaw Windows 安全加固脚本 v1.3
 echo.
 echo 用法: %~nx0 [选项]
-echo   --help         帮助
-echo   --dry-run      模拟运行
-echo   --status       查看状态
-echo   --rollback N   回退加固项 N (1-12)
-echo   --debug N      调试加固项 N (1-12)
-echo   --apply N      应用加固项 N (1-12)
+echo.
+echo   加固:
+echo   --apply N        应用加固项 N (1-12)
+echo   --pre            仅执行部署前加固 (7项)
+echo   --post           仅执行部署后加固 (5项)
+echo.
+echo   回退:
+echo   --rollback N     回退加固项 N (1-12)
+echo   --rollback-all   一键回退全部加固项
+echo   --rollback-pre   一键回退部署前加固项
+echo   --rollback-post  一键回退部署后加固项
+echo.
+echo   其他:
+echo   --help           帮助
+echo   --dry-run        模拟运行
+echo   --status         查看状态
+echo   --debug N        调试加固项 N (1-12)
 goto :eof
 
 :exit_script
