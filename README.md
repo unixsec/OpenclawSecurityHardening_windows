@@ -1,4 +1,4 @@
-# OpenClaw Windows 10 Security Hardening Scripts
+# OpenClaw Windows Security Hardening Scripts
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-purple.svg)](https://docs.microsoft.com/powershell/)
