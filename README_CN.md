@@ -1,4 +1,4 @@
-# OpenClaw Windows 10 安全加固脚本
+# OpenClaw Windows 安全加固脚本
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1+-purple.svg)](https://docs.microsoft.com/powershell/)
